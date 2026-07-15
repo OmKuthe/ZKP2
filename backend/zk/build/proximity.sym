@@ -1,0 +1,11 @@
+1,1,0,main.pub_class_x
+2,2,0,main.pub_class_y
+3,3,0,main.pub_radius_sq
+4,-1,0,main.priv_student_x
+5,-1,0,main.priv_student_y
+6,-1,0,main.dx
+7,-1,0,main.dy
+8,-1,0,main.dx_sq
+9,-1,0,main.dy_sq
+10,-1,0,main.dist_sq
+11,-1,0,main.is_inside

@@ -1,0 +1,20 @@
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.db
+.env
+
+# Node
+node_modules/
+package-lock.json
+
+# ZK temp files
+zk/build/proximity_js/
+temp_*.json
+test_*.json
+
+# IDE
+.vscode/
+.idea/
