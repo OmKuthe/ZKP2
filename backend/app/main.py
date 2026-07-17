@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from .database import init_db, AsyncSessionLocal
-from .api import auth, admin, manager, student
+from .api import auth, admin, manager, student, qr
 from .utils._init_db import init_default_data
 from datetime import datetime
 
@@ -39,6 +39,7 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(manager.router)
 app.include_router(student.router)
+app.include_router(qr.router)
 
 @app.get("/")
 async def root():

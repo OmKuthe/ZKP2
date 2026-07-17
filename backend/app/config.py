@@ -15,4 +15,9 @@ class Settings:
     PROOF_INTERVAL_SECONDS = int(os.getenv("PROOF_INTERVAL_SECONDS", "60"))  # 60 seconds = 1 min
     SESSION_DURATION_MINUTES = int(os.getenv("SESSION_DURATION_MINUTES", "10"))  # 10 min demo
     
+    # QR Service Settings (Phase 2)
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    QR_MASTER_SECRET = os.getenv("QR_MASTER_SECRET", "change-this-in-production-secret-key")
+    QR_CHALLENGE_TTL = int(os.getenv("QR_CHALLENGE_TTL", "30"))  # 30 seconds for TOTP-style challenges
+    
 settings = Settings()
