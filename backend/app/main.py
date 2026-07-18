@@ -1,54 +1,57 @@
+# backend/app/main.py
+"""
+ZKAttend Phase 2A - Main Application
+"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from .database import init_db, AsyncSessionLocal
-from .api import auth, admin, manager, student, qr
-from .utils._init_db import init_default_data
-from datetime import datetime
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: create tables and init default data
-    await init_db()
-    async with AsyncSessionLocal() as db:
-        await init_default_data(db)
-    print("✅ Database initialized with default data")
-    yield
-    # Shutdown cleanup
-    print("👋 Shutting down...")
+from .core.config import settings
+from .core.database import engine, Base
 
+# Import all models so they get registered
+from .models import Company, Student, Session, ContinuityCheck, Anomaly
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
+# Initialize app
 app = FastAPI(
-    title="ZKAttend - Internship Attendance System",
-    description="Zero-Knowledge Proof based attendance tracking for internships",
-    version="3.0.0",
-    lifespan=lifespan
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    debug=settings.DEBUG
 )
 
-# CORS configuration - FIXED
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000","*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
-# Include routers
-app.include_router(auth.router)
-app.include_router(admin.router)
-app.include_router(manager.router)
-app.include_router(student.router)
-app.include_router(qr.router)
 
 @app.get("/")
 async def root():
+    """Health check endpoint"""
     return {
-        "message": "ZKAttend Internship Attendance System",
-        "version": "3.0.0",
+        "app": settings.APP_NAME,
+        "version": settings.APP_VERSION,
         "status": "running"
     }
 
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    """Detailed health check"""
+    return {
+        "status": "healthy",
+        "database": settings.DATABASE_URL.split("://")[0]
+    }
+
+
+# Import and include routes (we'll add these later)
+# from .api.routes import auth, sessions, qr
+# app.include_router(auth.router)
+# app.include_router(sessions.router)
+# app.include_router(qr.router)
