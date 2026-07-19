@@ -1,6 +1,7 @@
 # backend/app/models/session.py
 """
 Session model - Stores active attendance sessions
+Includes Phase 2B: Hash Chain fields
 """
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Boolean
 from sqlalchemy.sql import func
@@ -13,7 +14,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, unique=True, index=True, nullable=False)  # e.g., "session_abc123"
+    session_id = Column(String, unique=True, index=True, nullable=False)
     
     # Foreign keys
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
@@ -24,23 +25,30 @@ class Session(Base):
     exit_time = Column(DateTime(timezone=True), nullable=True)
     
     # QR data
-    qr_token = Column(String, nullable=True)  # The QR token used for entry
-    qr_challenge_id = Column(String, nullable=True)  # Challenge ID for verification
+    qr_token = Column(String, nullable=True)
+    qr_challenge_id = Column(String, nullable=True)
     
-    # Hash chain
-    hash_chain_root = Column(String, nullable=True)  # Root hash
-    hash_chain_seed = Column(String, nullable=True)  # Seed (only stored temporarily)
-    last_hash_link = Column(String, nullable=True)  # Last verified link
-    hash_chain_index = Column(Integer, default=0)  # Current position in chain
+    # ========================================
+    # Phase 2B: Hash Chain fields
+    # ========================================
+    hash_chain_root = Column(String, nullable=True)      # Final hash (hN) - stored on server
+    hash_chain_seed = Column(String, nullable=True)      # Random seed - sent to app, not stored long-term
+    hash_chain_length = Column(Integer, default=100)     # Total number of links
+    last_hash_link = Column(String, nullable=True)       # Last verified link (hN-1, hN-2, etc.)
+    hash_chain_index = Column(Integer, default=0)        # Current position (how many links revealed)
     
-    # Environment commitment
-    environment_commitment = Column(String, nullable=True)  # Hashed environment (never raw data)
+    # ========================================
+    # Phase 2C: Environment commitment (future)
+    # ========================================
+    environment_commitment = Column(String, nullable=True)
     
-    # Status
+    # ========================================
+    # Session status
+    # ========================================
     status = Column(String, default="active")  # active | completed | completed_with_anomaly | flagged
     
     # Duration
-    total_duration_seconds = Column(Float, nullable=True)  # Computed at exit
+    total_duration_seconds = Column(Float, nullable=True)
     
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())

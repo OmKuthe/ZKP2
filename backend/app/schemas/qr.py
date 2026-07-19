@@ -1,6 +1,6 @@
 # backend/app/schemas/qr.py
 """
-QR schemas for Phase 2A
+QR schemas for Phase 2A + Phase 2B
 """
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -32,8 +32,9 @@ class EntryRequest(BaseModel):
 
 
 class EntryResponse(BaseModel):
-    """Entry response"""
+    """Entry response - Phase 2B includes seed"""
     session_id: str = Field(..., description="Unique session ID")
+    seed: Optional[str] = Field(None, description="Hash chain seed (for app)")
     message: str = Field(..., description="Status message")
     entry_time: int = Field(..., description="Unix timestamp of entry")
 
@@ -42,6 +43,7 @@ class ExitRequest(BaseModel):
     """Exit verification"""
     session_id: str = Field(..., description="Session ID to close")
     qr_token: str = Field(..., description="Exit QR token")
+    hash_link: Optional[str] = Field(None, description="Final hash chain link (Phase 2B)")
 
 
 class ExitResponse(BaseModel):
@@ -50,13 +52,15 @@ class ExitResponse(BaseModel):
     duration_seconds: int
     status: str
     message: str
+    chain_verified: Optional[bool] = Field(None, description="Was the hash chain verified? (Phase 2B)")
 
 
 class VerifyContinuityRequest(BaseModel):
-    """Continuity check request"""
+    """Continuity check request - Phase 2B + 2C"""
     session_id: str
+    hash_link: str  # Next hash chain link
+    hash_index: int  # Which link in the chain
     environment_proof: Optional[dict] = None
-    hash_link: str
     timestamp: int
 
 
@@ -65,3 +69,4 @@ class VerifyContinuityResponse(BaseModel):
     verified: bool
     next_check_seconds: int
     message: str
+    current_index: Optional[int] = None
