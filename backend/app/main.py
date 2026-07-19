@@ -11,6 +11,9 @@ from .core.database import engine, Base
 # Import all models so they get registered
 from .models import Company, Student, Session, ContinuityCheck, Anomaly
 
+# Import API router
+from .api import router as api_router
+
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
@@ -30,6 +33,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include API routes
+app.include_router(api_router, prefix="/api")
+
 
 @app.get("/")
 async def root():
@@ -48,10 +54,3 @@ async def health():
         "status": "healthy",
         "database": settings.DATABASE_URL.split("://")[0]
     }
-
-
-# Import and include routes (we'll add these later)
-# from .api.routes import auth, sessions, qr
-# app.include_router(auth.router)
-# app.include_router(sessions.router)
-# app.include_router(qr.router)
