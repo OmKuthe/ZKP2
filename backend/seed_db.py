@@ -3,46 +3,44 @@
 Seed database with test data
 Run: python seed_db.py
 """
-from app.core.database import SessionLocal
-from app.models import Company, Student
+from app.core.database import SessionLocal, engine, Base
+from app.models import Company, Student, Session, ContinuityCheck, Anomaly
+from datetime import datetime
 import bcrypt
 
 def seed_database():
     """Add test data to database"""
+    
+    # ✅ Step 1: Create all tables
+    print("📊 Creating tables...")
+    Base.metadata.create_all(bind=engine)
+    print("✅ Tables created")
+    
     db = SessionLocal()
     
     try:
-        print("🌱 Seeding database...")
-        
-        # 1. Check if company exists
-        company = db.query(Company).filter(Company.name == "TCS Pune").first()
-        
-        if not company:
-            # Create company if it doesn't exist
-            company = Company(
-                name="TCS Pune",
-                geofence_center_lat=18.5204,
-                geofence_center_lng=73.8567,
-                geofence_radius=2.0,
-                qr_master_secret="tcs-secret-123"
-            )
-            db.add(company)
-            db.commit()
-            db.refresh(company)
-            print(f"✅ Created Company: {company.name} (ID: {company.id})")
-        else:
-            print(f"✅ Company already exists: {company.name} (ID: {company.id})")
-        
-        # 2. Check if students already exist
-        existing_students = db.query(Student).filter(Student.company_id == company.id).count()
-        if existing_students > 0:
-            print(f"⚠️  {existing_students} students already exist. Skipping student creation.")
-            print("\n📊 Database already has data!")
-            print(f"   Company: {company.name}")
-            print(f"   Students: {existing_students}")
+        # Check if data already exists
+        existing_company = db.query(Company).filter(Company.name == "TCS Pune").first()
+        if existing_company:
+            print("⚠️  Database already has data. Skipping seed.")
             return
         
-        # 3. Create students
+        print("🌱 Seeding database...")
+        
+        # 1. Create a company
+        company = Company(
+            name="TCS Pune",
+            geofence_center_lat=18.5204,
+            geofence_center_lng=73.8567,
+            geofence_radius=2.0,
+            qr_master_secret="tcs-secret-123"
+        )
+        db.add(company)
+        db.commit()
+        db.refresh(company)
+        print(f"✅ Created Company: {company.name} (ID: {company.id})")
+        
+        # 2. Create students
         students_data = [
             {"student_id": "STU001", "name": "Om Kuthe", "email": "om@example.com", "password": "password123"},
             {"student_id": "STU002", "name": "Rahul Sharma", "email": "rahul@example.com", "password": "password123"},
@@ -51,7 +49,6 @@ def seed_database():
         
         created_students = []
         for data in students_data:
-            # Hash password
             hashed = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt())
             
             student = Student(

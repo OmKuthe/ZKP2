@@ -35,6 +35,7 @@ class Session(Base):
     hash_chain_seed = Column(String, nullable=True)      # Random seed - sent to app, not stored long-term
     hash_chain_length = Column(Integer, default=100)     # Total number of links
     last_hash_link = Column(String, nullable=True)       # Last verified link (hN-1, hN-2, etc.)
+    last_hash_check = Column(DateTime(timezone=True), nullable=True)  # Phase 2D: Last continuity check
     hash_chain_index = Column(Integer, default=0)        # Current position (how many links revealed)
     
     # ========================================

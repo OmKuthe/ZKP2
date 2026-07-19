@@ -1,9 +1,9 @@
 # backend/app/api/__init__.py
 from fastapi import APIRouter
-from .routes import router as qr_router
+from .routes import qr_router, admin_router
 
-# ✅ Create main router
 router = APIRouter()
+router.include_router(qr_router)
+router.include_router(admin_router)
 
-# ✅ Include QR router with prefix
-router.include_router(qr_router, prefix="/session", tags=["session"])
+__all__ = ["router"]
