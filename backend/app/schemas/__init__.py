@@ -1,7 +1,7 @@
 # backend/app/schemas/__init__.py
-from .auth import LoginRequest, LoginResponse, StudentCreate
-from .company import CompanyCreate, CompanyResponse, CompanyUpdate
-from .student import StudentResponse, StudentUpdate
+from .auth import LoginRequest, LoginResponse
+from .company import CompanyCreate, CompanyResponse
+from .student import StudentCreate, StudentResponse
 from .session import SessionResponse, SessionListResponse
 from .qr import (
     QRRequest,
@@ -13,26 +13,37 @@ from .qr import (
     VerifyContinuityRequest,
     VerifyContinuityResponse,
 )
+from .admin import (
+    CompanySummary,
+    StudentSummary,
+    SessionSummary,
+    AnomalySummary,
+    DashboardStats,
+    CompanyListResponse,
+    StudentListResponse,
+    SessionListResponse,
+)
+from .internship import (
+    InternshipCreate,
+    InternshipUpdate,
+    InternshipResponse,
+    InternshipAssignmentRequest,
+    InternshipAssignmentResponse,
+)
 
 __all__ = [
     # Auth
     "LoginRequest",
     "LoginResponse",
-    "StudentCreate",
-    
     # Company
     "CompanyCreate",
     "CompanyResponse",
-    "CompanyUpdate",
-    
     # Student
+    "StudentCreate",
     "StudentResponse",
-    "StudentUpdate",
-    
     # Session
     "SessionResponse",
     "SessionListResponse",
-    
     # QR
     "QRRequest",
     "QRResponse",
@@ -42,4 +53,19 @@ __all__ = [
     "ExitResponse",
     "VerifyContinuityRequest",
     "VerifyContinuityResponse",
+    # Admin
+    "CompanySummary",
+    "StudentSummary",
+    "SessionSummary",
+    "AnomalySummary",
+    "DashboardStats",
+    "CompanyListResponse",
+    "StudentListResponse",
+    "SessionListResponse",
+    # Internship
+    "InternshipCreate",
+    "InternshipUpdate",
+    "InternshipResponse",
+    "InternshipAssignmentRequest",
+    "InternshipAssignmentResponse",
 ]

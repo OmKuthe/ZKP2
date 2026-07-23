@@ -31,6 +31,7 @@ class Company(Base):
     # Relationships
     students = relationship("Student", back_populates="company")
     sessions = relationship("Session", back_populates="company")
-
+    # Add this to Company model
+    internships = relationship("Internship", back_populates="company")
     def __repr__(self):
         return f"<Company(id={self.id}, name='{self.name}')>"

@@ -31,5 +31,8 @@ class Student(Base):
     company = relationship("Company", back_populates="students")
     sessions = relationship("Session", back_populates="student")
 
+    # Add this to Student model
+    internships = relationship("Internship", secondary="internship_assignments", back_populates="students")
+
     def __repr__(self):
         return f"<Student(id={self.id}, student_id='{self.student_id}', name='{self.name}')>"

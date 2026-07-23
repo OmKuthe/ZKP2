@@ -34,3 +34,4 @@ class CompanyUpdate(BaseModel):
     geofence_center_lng: Optional[float] = None
     geofence_radius: Optional[float] = None
     is_active: Optional[bool] = None
+

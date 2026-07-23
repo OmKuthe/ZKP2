@@ -1,18 +1,17 @@
 # backend/app/api/routes/admin.py
 """
-Admin APIs - Phase 2E
-T&P Coordinator and Company Admin endpoints
+Admin APIs - Company and Student Management
 """
+from .internships import Internship
+from .internships import InternshipAssignment
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import func, desc
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List
 
 from ...models import Student, Company, Session, Anomaly
 from ...core.database import get_db
-
-# ✅ Fix: Use relative imports for schemas
 from ...schemas.admin import (
     CompanySummary,
     StudentSummary,
@@ -23,54 +22,31 @@ from ...schemas.admin import (
     StudentListResponse,
     SessionListResponse,
 )
+from ...schemas.company import CompanyCreate, CompanyResponse
+from ...schemas.student import StudentCreate, StudentResponse
+import bcrypt
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# ==================== Company CRUD ====================
 
-# ==================== T&P Coordinator Endpoints ====================
-
-@router.get("/dashboard/stats", response_model=DashboardStats)
-async def get_dashboard_stats(
+@router.post("/companies", response_model=CompanyResponse)
+async def create_company(
+    request: CompanyCreate,
     db: DBSession = Depends(get_db)
 ):
-    """Get overall stats for T&P Coordinator dashboard"""
-    
-    # Total companies
-    total_companies = db.query(Company).filter(Company.is_active == True).count()
-    
-    # Total students
-    total_students = db.query(Student).filter(Student.is_active == True).count()
-    
-    # Active sessions today
-    today = datetime.now().date()
-    active_sessions = db.query(Session).filter(
-        Session.status == "active",
-        func.date(Session.entry_time) == today
-    ).count()
-    
-    # Completed sessions today
-    completed_sessions = db.query(Session).filter(
-        Session.status == "completed",
-        func.date(Session.entry_time) == today
-    ).count()
-    
-    # Anomalies (unresolved)
-    unresolved_anomalies = db.query(Anomaly).filter(
-        Anomaly.resolved == False
-    ).count()
-    
-    # Attendance rate (today)
-    total_today = active_sessions + completed_sessions
-    attendance_rate = (completed_sessions / total_today * 100) if total_today > 0 else 0
-    
-    return DashboardStats(
-        total_companies=total_companies,
-        total_students=total_students,
-        active_sessions=active_sessions,
-        completed_sessions=completed_sessions,
-        attendance_rate=round(attendance_rate, 1),
-        unresolved_anomalies=unresolved_anomalies,
+    """Create a new company"""
+    company = Company(
+        name=request.name,
+        geofence_center_lat=request.geofence_center_lat,
+        geofence_center_lng=request.geofence_center_lng,
+        geofence_radius=request.geofence_radius,
+        qr_master_secret=request.name.lower().replace(" ", "-") + "-secret"
     )
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    return company
 
 
 @router.get("/companies", response_model=CompanyListResponse)
@@ -79,7 +55,7 @@ async def get_companies(
     limit: int = Query(20, ge=1, le=100),
     db: DBSession = Depends(get_db)
 ):
-    """Get all companies with student counts"""
+    """Get all companies"""
     offset = (page - 1) * limit
     
     companies = db.query(Company).filter(Company.is_active == True).offset(offset).limit(limit).all()
@@ -117,6 +93,68 @@ async def get_companies(
     )
 
 
+@router.get("/companies/{company_id}", response_model=CompanyResponse)
+async def get_company(
+    company_id: int,
+    db: DBSession = Depends(get_db)
+):
+    """Get company by ID"""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
+
+
+@router.put("/companies/{company_id}", response_model=CompanyResponse)
+async def update_company(
+    company_id: int,
+    request: CompanyCreate,
+    db: DBSession = Depends(get_db)
+):
+    """Update company"""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    company.name = request.name
+    company.geofence_center_lat = request.geofence_center_lat
+    company.geofence_center_lng = request.geofence_center_lng
+    company.geofence_radius = request.geofence_radius
+    
+    db.commit()
+    db.refresh(company)
+    return company
+
+
+# ==================== Student CRUD ====================
+
+@router.post("/students", response_model=StudentResponse)
+async def create_student(
+    request: StudentCreate,
+    db: DBSession = Depends(get_db)
+):
+    """Create a new student"""
+    # Check if student_id already exists
+    existing = db.query(Student).filter(Student.student_id == request.student_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Student ID already exists")
+    
+    # Hash password
+    hashed = bcrypt.hashpw(request.password.encode(), bcrypt.gensalt())
+    
+    student = Student(
+        student_id=request.student_id,
+        name=request.name,
+        email=request.email,
+        password_hash=hashed.decode(),
+        company_id=request.company_id
+    )
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    return student
+
+
 @router.get("/students", response_model=StudentListResponse)
 async def get_students(
     company_id: Optional[int] = Query(None),
@@ -124,7 +162,7 @@ async def get_students(
     limit: int = Query(20, ge=1, le=100),
     db: DBSession = Depends(get_db)
 ):
-    """Get all students (filtered by company if provided)"""
+    """Get all students"""
     offset = (page - 1) * limit
     
     query = db.query(Student).filter(Student.is_active == True)
@@ -162,6 +200,109 @@ async def get_students(
     )
 
 
+@router.get("/students/{student_id}", response_model=StudentResponse)
+async def get_student(
+    student_id: str,
+    db: DBSession = Depends(get_db)
+):
+    """Get student by student_id"""
+    student = db.query(Student).filter(Student.student_id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return student
+
+
+@router.put("/students/{student_id}")
+async def update_student(
+    student_id: str,
+    request: StudentCreate,
+    db: DBSession = Depends(get_db)
+):
+    """Update student"""
+    student = db.query(Student).filter(Student.student_id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    student.name = request.name
+    student.email = request.email
+    if request.company_id:
+        student.company_id = request.company_id
+    
+    db.commit()
+    db.refresh(student)
+    return student
+
+
+
+@router.delete("/students/{student_id}")
+async def delete_student(
+    student_id: str,
+    db: DBSession = Depends(get_db)
+):
+    """Delete a student by student_id"""
+    student = db.query(Student).filter(Student.student_id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Check if student is assigned to any active internship
+    assignment = db.query(InternshipAssignment).join(Internship).filter(
+        InternshipAssignment.student_id == student.id,
+        Internship.status == "active",
+        InternshipAssignment.is_active == True
+    ).first()
+    
+    if assignment:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete student. They are currently assigned to an active internship."
+        )
+    
+    # ✅ Soft delete (set is_active to False)
+    student.is_active = False
+    db.commit()
+    
+    return {"message": f"Student {student_id} deleted successfully"}
+# ==================== Dashboard Stats ====================
+
+@router.get("/dashboard/stats", response_model=DashboardStats)
+async def get_dashboard_stats(
+    db: DBSession = Depends(get_db)
+):
+    """Get overall stats for T&P Coordinator dashboard"""
+    
+    total_companies = db.query(Company).filter(Company.is_active == True).count()
+    total_students = db.query(Student).filter(Student.is_active == True).count()
+    
+    today = datetime.now().date()
+    active_sessions = db.query(Session).filter(
+        Session.status == "active",
+        func.date(Session.entry_time) == today
+    ).count()
+    
+    completed_sessions = db.query(Session).filter(
+        Session.status == "completed",
+        func.date(Session.entry_time) == today
+    ).count()
+    
+    unresolved_anomalies = db.query(Anomaly).filter(
+        Anomaly.resolved == False
+    ).count()
+    
+    total_today = active_sessions + completed_sessions
+    attendance_rate = (completed_sessions / total_today * 100) if total_today > 0 else 0
+    
+    return DashboardStats(
+        total_companies=total_companies,
+        total_students=total_students,
+        active_sessions=active_sessions,
+        completed_sessions=completed_sessions,
+        attendance_rate=round(attendance_rate, 1),
+        unresolved_anomalies=unresolved_anomalies,
+    )
+
+
+# ==================== Sessions ====================
+
 @router.get("/sessions", response_model=SessionListResponse)
 async def get_sessions(
     company_id: Optional[int] = Query(None),
@@ -192,8 +333,6 @@ async def get_sessions(
         company = db.query(Company).filter(Company.id == session.company_id).first()
         
         duration_minutes = int(session.total_duration_seconds / 60) if session.total_duration_seconds else 0
-        
-        # Check for anomalies
         has_anomaly = db.query(Anomaly).filter(Anomaly.session_id == session.id).count() > 0
         
         results.append(
@@ -220,12 +359,14 @@ async def get_sessions(
     )
 
 
+# ==================== Anomalies ====================
+
 @router.get("/anomalies", response_model=List[AnomalySummary])
 async def get_anomalies(
     resolved: Optional[bool] = Query(None),
     db: DBSession = Depends(get_db)
 ):
-    """Get anomalies (filtered by resolved status)"""
+    """Get anomalies"""
     query = db.query(Anomaly)
     if resolved is not None:
         query = query.filter(Anomaly.resolved == resolved)
