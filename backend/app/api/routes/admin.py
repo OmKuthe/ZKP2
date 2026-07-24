@@ -2,15 +2,13 @@
 """
 Admin APIs - Company and Student Management
 """
-from .internships import Internship
-from .internships import InternshipAssignment
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy import func, desc
 from datetime import datetime
 from typing import Optional, List
 
-from ...models import Student, Company, Session, Anomaly
+from ...models import Student, Company, Session, Anomaly, Internship, InternshipAssignment
 from ...core.database import get_db
 from ...schemas.admin import (
     CompanySummary,

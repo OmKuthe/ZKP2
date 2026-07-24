@@ -36,6 +36,9 @@ app.add_middleware(
 # Include API routes
 app.include_router(api_router, prefix="/api")
 
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "database": "sqlite"}
 
 @app.get("/")
 async def root():
