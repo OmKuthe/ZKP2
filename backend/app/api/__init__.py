@@ -6,6 +6,7 @@ from .routes import (
     internships_router,
     student_router,
     manager_router,
+    zk_router,
 )
 
 router = APIRouter()
@@ -15,5 +16,6 @@ router.include_router(auth_router)
 router.include_router(internships_router)
 router.include_router(student_router)
 router.include_router(manager_router)  
+router.include_router(zk_router) 
 
 __all__ = ["router"]

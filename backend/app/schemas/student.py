@@ -3,8 +3,7 @@
 Student schemas
 """
 from pydantic import BaseModel, EmailStr
-from typing import Optional, Dict
-
+from typing import Optional, Dict ,Any
 
 # ---------- Student CRUD ----------
 
@@ -57,6 +56,7 @@ class StudentEntryRequest(BaseModel):
     student_id: str
     company_id: int
     qr_token: str
+    zk_proof: Optional[Dict[str, Any]] = None
 
 
 class StudentEntryResponse(BaseModel):

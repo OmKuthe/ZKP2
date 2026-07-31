@@ -1,4 +1,4 @@
-// app/api/client.ts
+// zkattend-mobile/app/api/client.ts
 import axios from 'axios';
 
 export const API_URL = 'http://192.168.1.174:8000/api';
@@ -33,7 +33,7 @@ export const studentAPI = {
   getDashboard: (studentId: string) => 
     api.get(`/student/dashboard?student_id=${studentId}`),
   
-  // Start entry with GPS
+  // Start entry with GPS - BACKEND GENERATES ZKP
   startEntry: (studentId: string, latitude: number, longitude: number) =>
     api.post('/student/start-entry', { 
       student_id: studentId, 
@@ -46,7 +46,7 @@ export const studentAPI = {
     api.post('/student/complete-entry', {
       student_id: studentId,
       company_id: companyId,
-      qr_token: qrToken
+      qr_token: qrToken,
     }),
   
   // Start exit with GPS

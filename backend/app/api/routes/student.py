@@ -19,6 +19,7 @@ from ...schemas.student import (
 )
 from ...services.qr_service import QRService
 from ...services.geofence import calculate_distance, verify_geofence
+from ...zk.proof_generator import generate_and_verify_proximity_proof
 
 router = APIRouter(prefix="/student", tags=["student"])
 logger = logging.getLogger(__name__)
@@ -43,9 +44,10 @@ async def start_entry(
 ):
     """
     Step 1: Student sends GPS coordinates.
-    Server checks geofence, then generates QR automatically.
+    Server checks geofence using ZKP (privately).
     """
     logger.info(f"📍 Start entry for student: {request.student_id}")
+    logger.info(f"📍 GPS received: lat={request.latitude}, lng={request.longitude}")
     
     # 1. Get student
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
@@ -68,6 +70,8 @@ async def start_entry(
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     
+    logger.info(f"📍 Company: {company.name}, geofence center: ({company.geofence_center_lat}, {company.geofence_center_lng}), radius: {company.geofence_radius} km")
+    
     # 3. Check if student already has active session
     existing_session = db.query(Session).filter(
         Session.student_id == student.id,
@@ -81,22 +85,60 @@ async def start_entry(
             "qr_data": None
         }
     
-    # 4. Check GPS within geofence
-    distance = calculate_distance(
+    # 4. First check: calculate actual distance (for debugging)
+    actual_distance = calculate_distance(
         request.latitude, request.longitude,
         company.geofence_center_lat, company.geofence_center_lng
     )
+    logger.info(f"📊 Actual distance from company: {actual_distance:.4f} km")
+    logger.info(f"📊 Radius: {company.geofence_radius} km")
+    logger.info(f"📊 Is within radius: {actual_distance <= company.geofence_radius}")
     
-    is_within = distance <= company.geofence_radius
-    
-    if not is_within:
+    # If not within radius, return early with clear message
+    if actual_distance > company.geofence_radius:
+        logger.warning(f"❌ Student is outside geofence: {actual_distance:.2f} km > {company.geofence_radius} km")
         return {
             "verified": False,
-            "message": f"You are {distance:.2f}km away from the company. Please reach the location.",
+            "message": f"You are {actual_distance:.2f}km away from the company (radius: {company.geofence_radius}km).",
+            "qr_data": None,
+            "actual_distance": actual_distance,
+            "radius": company.geofence_radius
+        }
+    
+    # 5. ✅ Generate Proximity ZKP (privacy-preserving!)
+    logger.info("🔐 Generating Proximity ZKP...")
+    
+    try:
+        is_valid, message, proof, public_signals = generate_and_verify_proximity_proof(
+            student_lat=request.latitude,
+            student_lng=request.longitude,
+            company_lat=company.geofence_center_lat,
+            company_lng=company.geofence_center_lng,
+            radius_km=company.geofence_radius
+        )
+        
+        logger.info(f"📊 ZKP Result: is_valid={is_valid}, message={message}")
+        
+        if not is_valid:
+            logger.error(f"❌ Proximity proof failed: {message}")
+            return {
+                "verified": False,
+                "message": f"ZKP verification failed: {message}",
+                "qr_data": None
+            }
+        
+        logger.info("✅ Proximity proof verified! Student is within geofence.")
+        logger.info(f"   Public signals: {public_signals}")
+        
+    except Exception as e:
+        logger.error(f"❌ ZKP generation error: {e}")
+        return {
+            "verified": False,
+            "message": f"ZKP error: {str(e)}",
             "qr_data": None
         }
     
-    # 5. Generate QR challenge using singleton
+    # 6. Generate QR challenge (for entry verification)
     qr_service = get_qr_service()
     challenge = qr_service.generate_challenge(
         student_id=request.student_id,
@@ -108,7 +150,7 @@ async def start_entry(
     
     return {
         "verified": True,
-        "message": "Location verified. QR generated automatically.",
+        "message": "Location verified using ZKP. QR generated automatically.",
         "qr_data": {
             "student_id": challenge.student_id,
             "company_id": challenge.company_id,
@@ -116,7 +158,11 @@ async def start_entry(
             "timestamp": challenge.timestamp,
             "expires_at": challenge.expires_at,
             "purpose": "entry"
-        }
+        },
+        "zkp_verified": True,
+        "public_signals": public_signals,
+        "actual_distance": actual_distance,
+        "radius": company.geofence_radius
     }
 
 
@@ -128,17 +174,12 @@ async def complete_entry(
     db: DBSession = Depends(get_db)
 ):
     """
-    Step 2: Student completes entry with auto-detected QR.
+    Step 2: Student completes entry with QR verification.
     """
     logger.info(f"✅ Complete entry for student: {request.student_id}")
-    logger.info(f"🔍 QR Token received: {request.qr_token[:8]}...")
     
-    # 1. Verify QR token using singleton
+    # 1. Verify QR token
     qr_service = get_qr_service()
-    
-    # Debug: Check what tokens are stored
-    logger.info(f"📚 Stored tokens: {list(qr_service._challenges.keys())}")
-    
     result = qr_service.verify_challenge(
         token=request.qr_token,
         student_id=request.student_id,
@@ -185,7 +226,7 @@ async def complete_entry(
     
     return StudentEntryResponse(
         session_id=session_id,
-        message="Entry verified successfully. Session started.",
+        message="Entry verified successfully.",
         entry_time=entry_time
     )
 
@@ -202,6 +243,7 @@ async def start_exit(
     Generates exit QR automatically.
     """
     logger.info(f"📍 Start exit for student: {request.student_id}")
+    logger.info(f"📍 GPS received: lat={request.latitude}, lng={request.longitude}")
     
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
     if not student:
@@ -231,6 +273,7 @@ async def start_exit(
         is_within = distance <= company.geofence_radius
         
         if not is_within:
+            logger.info(f"⚠️ Student is {distance:.2f}km away from company, but exit is still allowed")
             return {
                 "verified": True,
                 "message": f"You are {distance:.2f}km away from the company. Exit will still be recorded.",

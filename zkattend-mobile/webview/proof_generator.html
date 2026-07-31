@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZK Proof Generator</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+            padding: 20px; 
+            background: #1a1a2e; 
+            color: white; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container { max-width: 400px; text-align: center; }
+        .spinner { border: 4px solid #2d2d44; border-top: 4px solid #4F46E5; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .status { color: #a5b4fc; margin-top: 10px; font-size: 14px; }
+        .success { color: #16A34A; }
+        .error { color: #DC2626; }
+        .debug { color: #666; font-size: 11px; margin-top: 10px; word-break: break-all; max-height: 200px; overflow-y: auto; text-align: left; padding: 10px; background: #111; border-radius: 8px; }
+        .title { font-size: 20px; font-weight: bold; margin-bottom: 5px; }
+        .subtitle { color: #94a3b8; font-size: 13px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="title">🔐 ZKAttend</div>
+        <div class="subtitle">Generating cryptographic proof...</div>
+        <div class="spinner" id="spinner"></div>
+        <p class="status" id="status">Initializing...</p>
+        <div class="debug" id="debug">Waiting for messages...</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/snarkjs@0.7.5/build/snarkjs.min.js"></script>
+    <script>
+        (function() {
+            const statusEl = document.getElementById('status');
+            const debugEl = document.getElementById('debug');
+            const spinnerEl = document.getElementById('spinner');
+
+            function log(msg) {
+                console.log('[WebView]', msg);
+                debugEl.textContent += '\n' + msg;
+                debugEl.scrollTop = debugEl.scrollHeight;
+            }
+
+            // ✅ Convert ANY value to JSON-safe format (no BigInts)
+            function toJSONSafe(value) {
+                if (value === null || value === undefined) return value;
+                if (typeof value === 'bigint') return value.toString();
+                if (value instanceof Error) {
+                    return { message: value.message, stack: value.stack || '' };
+                }
+                if (Array.isArray(value)) {
+                    return value.map(v => toJSONSafe(v));
+                }
+                if (typeof value === 'object') {
+                    const result = {};
+                    for (const key in value) {
+                        try {
+                            result[key] = toJSONSafe(value[key]);
+                        } catch (e) {
+                            result[key] = '[unserializable]';
+                        }
+                    }
+                    return result;
+                }
+                return value;
+            }
+
+            // ✅ Safe send function - ALWAYS sanitizes
+            function safeSend(type, data) {
+                try {
+                    const safeData = toJSONSafe(data || {});
+                    const message = JSON.stringify({ type, ...safeData });
+                    log('📤 Sending: ' + type);
+                    window.ReactNativeWebView.postMessage(message);
+                } catch (e) {
+                    log('❌ Send failed: ' + e.message);
+                    // Last resort - send minimal error
+                    try {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'error',
+                            error: 'Send failed: ' + e.message
+                        }));
+                    } catch (e2) {
+                        // Nothing we can do
+                    }
+                }
+            }
+
+            // Check if snarkjs loaded
+            setTimeout(() => {
+                if (typeof snarkjs === 'undefined') {
+                    log('❌ snarkjs NOT loaded!');
+                    statusEl.textContent = '❌ snarkjs failed to load';
+                    statusEl.className = 'status error';
+                    safeSend('error', { error: 'snarkjs library failed to load' });
+                } else {
+                    log('✅ snarkjs loaded successfully');
+                    statusEl.textContent = '✅ snarkjs loaded, waiting for data...';
+                    statusEl.className = 'status success';
+                    spinnerEl.style.display = 'none';
+                    safeSend('ready', {});
+                }
+            }, 2000);
+
+            // Listen for messages from React Native
+            window.addEventListener('message', function(event) {
+                log('📩 Received message from app');
+                try {
+                    const data = JSON.parse(event.data);
+                    log('📩 Data type: ' + data.type);
+                    
+                    if (data.type === 'start') {
+                        log('📥 Starting proof generation...');
+                        statusEl.textContent = '📥 Loading circuit files...';
+                        spinnerEl.style.display = 'block';
+                        log('📦 WASM length: ' + data.wasm.length);
+                        log('📦 ZKEY length: ' + data.zkey.length);
+                        generateProof(data.wasm, data.zkey, data.input);
+                    } else {
+                        log('⚠️ Unknown message type: ' + data.type);
+                    }
+                } catch (error) {
+                    log('❌ Parse error: ' + error.message);
+                    safeSend('error', { error: 'Failed to parse message: ' + error.message });
+                }
+            });
+
+            async function generateProof(wasmBase64, zkeyBase64, inputData) {
+                try {
+                    log('📝 Converting base64 to buffer...');
+                    statusEl.textContent = '🔐 Generating proof...';
+                    
+                    const wasmString = atob(wasmBase64);
+                    const wasmBuffer = new Uint8Array(wasmString.length);
+                    for (let i = 0; i < wasmString.length; i++) {
+                        wasmBuffer[i] = wasmString.charCodeAt(i);
+                    }
+                    log('✅ WASM buffer: ' + wasmBuffer.length + ' bytes');
+                    
+                    const zkeyString = atob(zkeyBase64);
+                    const zkeyBuffer = new Uint8Array(zkeyString.length);
+                    for (let i = 0; i < zkeyString.length; i++) {
+                        zkeyBuffer[i] = zkeyString.charCodeAt(i);
+                    }
+                    log('✅ ZKEY buffer: ' + zkeyBuffer.length + ' bytes');
+
+                    if (typeof snarkjs === 'undefined') {
+                        throw new Error('snarkjs not loaded');
+                    }
+                    log('✅ snarkjs available');
+
+                    log('🔐 Calling snarkjs.groth16.fullProve...');
+                    statusEl.textContent = '🔐 Generating proof...';
+                    
+                    const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+                        inputData,
+                        wasmBuffer,
+                        zkeyBuffer
+                    );
+                    
+                    log('✅ Proof generated successfully!');
+                    statusEl.textContent = '✅ Proof generated!';
+                    statusEl.className = 'status success';
+                    spinnerEl.style.display = 'none';
+                    
+                    // ✅ Send via safeSend (automatically sanitizes)
+                    safeSend('proof', { 
+                        proof: proof, 
+                        publicSignals: publicSignals 
+                    });
+                    
+                } catch (error) {
+                    log('❌ Error: ' + error.message);
+                    statusEl.textContent = '❌ Error: ' + error.message;
+                    statusEl.className = 'status error';
+                    spinnerEl.style.display = 'none';
+                    // ✅ Send error via safeSend (automatically sanitizes)
+                    safeSend('error', { 
+                        error: error.message,
+                        stack: error.stack || ''
+                    });
+                }
+            }
+
+            window.onerror = function(message, source, lineno, colno, error) {
+                log('🔥 Unhandled error: ' + message);
+                safeSend('error', { error: 'Unhandled: ' + message });
+            };
+
+            log('✅ WebView initialized, waiting for snarkjs...');
+        })();
+    </script>
+</body>
+</html>

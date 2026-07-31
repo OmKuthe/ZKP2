@@ -3,6 +3,9 @@
 Geofence verification service
 """
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -27,4 +30,5 @@ def verify_geofence(lat: float, lon: float, center_lat: float, center_lon: float
     Check if a point is within a geofence
     """
     distance = calculate_distance(lat, lon, center_lat, center_lon)
+    logger.info(f"📊 Distance: {distance:.4f} km, Radius: {radius_km} km")
     return distance <= radius_km

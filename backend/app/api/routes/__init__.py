@@ -4,6 +4,7 @@ from .auth import router as auth_router
 from .internships import router as internships_router
 from .student import router as student_router
 from .manager import router as manager_router  # 
+from .zk import router as zk_router
 
 __all__ = [
     "qr_router",
@@ -11,5 +12,6 @@ __all__ = [
     "auth_router",
     "internships_router",
     "student_router",
-    "manager_router",  
+    "manager_router", 
+    "zk_router", 
 ]

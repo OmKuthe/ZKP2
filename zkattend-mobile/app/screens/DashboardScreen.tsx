@@ -1,4 +1,4 @@
-// app/screens/DashboardScreen.tsx
+// zkattend-mobile/app/screens/DashboardScreen.tsx
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -14,7 +14,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
-import QRCode from 'react-native-qrcode-svg';  // ✅ Import QR library
+import QRCode from 'react-native-qrcode-svg';
 import { studentAPI } from '../api/client';
 import { RootStackParamList } from '../types/navigation';
 
@@ -123,7 +123,7 @@ const DashboardScreen = () => {
     }
 
     if (!isWithinInternshipHours()) {
-      Alert.alert('Outside Working Hours', `Internship hours are ${internship.daily_start} - ${internship.daily_end}. Please check in during working hours.`);
+      Alert.alert('Outside Working Hours', `Internship hours are ${internship.daily_start} - ${internship.daily_end}.`);
       return;
     }
 
@@ -132,7 +132,6 @@ const DashboardScreen = () => {
     setLoading(true);
 
     try {
-      // Step 1: Get location
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         setCheckInStatus('error');
@@ -147,10 +146,10 @@ const DashboardScreen = () => {
         accuracy: Location.Accuracy.High,
       });
 
-      // Step 2: Verify location and get QR
-      setStatusMessage('🔍 Verifying location...');
+      setStatusMessage('🔍 Verifying location with ZKP...');
       setCheckInStatus('verifying_location');
 
+      // ✅ Send GPS to backend - backend generates and verifies ZKP
       const response = await studentAPI.startEntry(
         studentId,
         location.coords.latitude,
@@ -167,15 +166,15 @@ const DashboardScreen = () => {
         return;
       }
 
-      // Step 3: Show QR - ✅ 5 seconds to see it
-      setStatusMessage('📱 QR generated! Scanning automatically...');
+      // ✅ QR received
+      setStatusMessage('📱 QR generated! Verifying with server...');
       setCheckInStatus('qr_received');
       setQrData(data.qr_data);
       setShowQRModal(true);
 
-      // ✅ Wait 5 seconds so user can see the QR
+      // ✅ Complete entry automatically
       setTimeout(async () => {
-        setStatusMessage('📷 Scanning QR...');
+        setStatusMessage('🔐 Completing entry...');
         setCheckInStatus('scanning_qr');
 
         try {
@@ -189,16 +188,18 @@ const DashboardScreen = () => {
           setStatusMessage('✅ Check-in successful!');
           setShowQRModal(false);
           
-          Alert.alert('✅ Check In Successful', 'Session started successfully!');
+          Alert.alert('✅ Check In Successful', 'Entry verified with ZKP!');
           await refreshAll();
         } catch (error: any) {
+          console.error('❌ Entry error:', error);
           setCheckInStatus('error');
-          setStatusMessage(`❌ ${error.response?.data?.detail || 'Failed to complete entry'}`);
-          Alert.alert('Check-in Failed', error.response?.data?.detail || 'Failed to complete entry');
+          setStatusMessage(`❌ ${error.message}`);
+          Alert.alert('Check-in Failed', error.response?.data?.detail || error.message);
         }
-      }, 5000);  // ✅ 5 seconds
+      }, 3000);
 
     } catch (error: any) {
+      console.error('❌ Check-in error:', error);
       setCheckInStatus('error');
       setStatusMessage(`❌ ${error.message}`);
       Alert.alert('Error', error.response?.data?.detail || 'Failed to check in.');
@@ -248,7 +249,6 @@ const DashboardScreen = () => {
       setQrData(data.qr_data);
       setShowQRModal(true);
 
-      // ✅ 5 seconds for exit QR too
       setTimeout(async () => {
         setStatusMessage('📷 Scanning exit QR...');
         setCheckInStatus('scanning_qr');
@@ -274,7 +274,7 @@ const DashboardScreen = () => {
           setStatusMessage(`❌ ${error.response?.data?.detail || 'Failed to complete exit'}`);
           Alert.alert('Check-out Failed', error.response?.data?.detail || 'Failed to complete exit');
         }
-      }, 5000);  // ✅ 5 seconds
+      }, 3000);
 
     } catch (error: any) {
       setCheckInStatus('error');
@@ -399,7 +399,7 @@ const DashboardScreen = () => {
         {internship?.is_paid ? '💰 Paid Internship' : '📋 Internship Active'}
       </Text>
 
-      {/* ✅ QR Modal with REAL QR Code */}
+      {/* QR Modal */}
       <Modal
         visible={showQRModal}
         transparent={true}
@@ -412,10 +412,9 @@ const DashboardScreen = () => {
               {qrData?.purpose === 'entry' ? '📱 Entry QR Code' : '📱 Exit QR Code'}
             </Text>
             <Text style={styles.modalSubtitle}>
-              Scanning automatically in 5 seconds...
+              Verifying with server...
             </Text>
             
-            {/* ✅ Real QR Code */}
             <View style={styles.qrContainer}>
               {qrData && (
                 <QRCode
@@ -538,7 +537,6 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   footer: { textAlign: 'center', color: '#666', fontSize: 12, padding: 16 },
   
-  // ✅ QR Modal styles
   modalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.7)',
