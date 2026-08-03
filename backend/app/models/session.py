@@ -1,7 +1,7 @@
 # backend/app/models/session.py
 """
 Session model - Stores active attendance sessions
-Includes Phase 2B: Hash Chain fields
+Includes Phase 2B: Hash Chain fields (Counter-based)
 """
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Boolean
 from sqlalchemy.sql import func
@@ -29,14 +29,12 @@ class Session(Base):
     qr_challenge_id = Column(String, nullable=True)
     
     # ========================================
-    # Phase 2B: Hash Chain fields
+    # Phase 2B: Counter-based Hash Chain fields
     # ========================================
-    hash_chain_root = Column(String, nullable=True)      # Final hash (hN) - stored on server
-    hash_chain_seed = Column(String, nullable=True)      # Random seed - sent to app, not stored long-term
-    hash_chain_length = Column(Integer, default=100)     # Total number of links
-    last_hash_link = Column(String, nullable=True)       # Last verified link (hN-1, hN-2, etc.)
-    last_hash_check = Column(DateTime(timezone=True), nullable=True)  # Phase 2D: Last continuity check
-    hash_chain_index = Column(Integer, default=0)        # Current position (how many links revealed)
+    hash_chain_seed = Column(String, nullable=True)      # Random seed for hash chain
+    hash_counter = Column(Integer, default=0)            # Current counter value
+    hash_chain_length = Column(Integer, default=100)     # Max checks (optional)
+    last_hash_check = Column(DateTime(timezone=True), nullable=True)  # Last continuity check
     
     # ========================================
     # Phase 2C: Environment commitment (future)

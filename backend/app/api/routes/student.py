@@ -1,6 +1,7 @@
 # backend/app/api/routes/student.py
 """
 Student endpoints - Entry, Exit, GPS verification with QR
+Includes Phase 2B: Counter-based Hash Chain
 """
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session as DBSession
@@ -16,9 +17,12 @@ from ...schemas.student import (
     StudentEntryResponse,
     GPSVerificationRequest,
     GPSVerificationResponse,
+    ContinuityCheckRequest,
+    ContinuityCheckResponse,
 )
 from ...services.qr_service import QRService
-from ...services.geofence import calculate_distance, verify_geofence
+from ...services.geofence import calculate_distance
+from ...services.hash_chain import HashChainService
 from ...zk.proof_generator import generate_and_verify_proximity_proof
 
 router = APIRouter(prefix="/student", tags=["student"])
@@ -175,6 +179,7 @@ async def complete_entry(
 ):
     """
     Step 2: Student completes entry with QR verification.
+    Phase 2B: Generates seed and initializes counter.
     """
     logger.info(f"✅ Complete entry for student: {request.student_id}")
     
@@ -205,7 +210,12 @@ async def complete_entry(
     if existing:
         raise HTTPException(status_code=400, detail="You already have an active session")
     
-    # 4. Create session
+    # 4. ✅ Generate seed and initialize counter
+    hash_service = HashChainService()
+    seed = hash_service.generate_seed()
+    logger.info(f"🔐 Hash chain seed generated: {seed[:16]}...")
+    
+    # 5. Create session with hash chain
     session_id = f"session_{uuid.uuid4().hex[:12]}"
     entry_time = int(time.time())
     
@@ -215,6 +225,10 @@ async def complete_entry(
         company_id=request.company_id,
         entry_time=datetime.fromtimestamp(entry_time),
         qr_token=request.qr_token,
+        # ✅ Counter-based hash chain
+        hash_chain_seed=seed,
+        hash_counter=0,
+        hash_chain_length=100,
         status="active"
     )
     
@@ -226,8 +240,72 @@ async def complete_entry(
     
     return StudentEntryResponse(
         session_id=session_id,
-        message="Entry verified successfully.",
-        entry_time=entry_time
+        message="Entry verified successfully. Hash chain started.",
+        entry_time=entry_time,
+        seed=seed  # ✅ Send seed to app
+    )
+
+
+# ==================== Continuity Check ====================
+
+@router.post("/verify-continuity", response_model=ContinuityCheckResponse)
+async def verify_continuity(
+    request: ContinuityCheckRequest,
+    db: DBSession = Depends(get_db)
+):
+    """
+    Verify continuity using counter-based approach.
+    """
+    logger.info(f"🔍 Continuity check for session: {request.session_id}")
+    
+    # 1. Get session
+    session = db.query(Session).filter(
+        Session.session_id == request.session_id,
+        Session.status == "active"
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Active session not found")
+    
+    if not session.hash_chain_seed:
+        raise HTTPException(status_code=400, detail="No hash chain seed found")
+    
+    # 2. Get the next counter value
+    next_counter = session.hash_counter + 1
+    
+    # 3. Verify the provided hash
+    hash_service = HashChainService()
+    is_valid = hash_service.verify_hash(
+        seed=session.hash_chain_seed,
+        counter=next_counter,
+        provided_hash=request.hash_link
+    )
+    
+    if not is_valid:
+        logger.warning(f"❌ Hash verification failed for session {request.session_id}")
+        logger.warning(f"   Expected: {hash_service.get_hash(session.hash_chain_seed, next_counter)}")
+        logger.warning(f"   Received: {request.hash_link}")
+        
+        return ContinuityCheckResponse(
+            verified=False,
+            message="Hash verification failed. Session flagged for review.",
+            next_check_seconds=60,
+            current_index=session.hash_counter
+        )
+    
+    # 4. Update session
+    session.hash_counter = next_counter
+    session.last_hash_check = datetime.fromtimestamp(request.timestamp)
+    db.commit()
+    
+    logger.info(f"✅ Continuity check passed for session {request.session_id}")
+    logger.info(f"   Counter: {session.hash_counter}")
+    
+    return ContinuityCheckResponse(
+        verified=True,
+        message=f"Continuity verified successfully. Counter: {session.hash_counter}",
+        next_check_seconds=60,
+        current_index=session.hash_counter
     )
 
 
@@ -313,9 +391,11 @@ async def complete_exit(
 ):
     """
     Step 2: Student completes exit with auto-detected QR.
+    Phase 2B: Verifies exit hash.
     """
     logger.info(f"✅ Complete exit for student: {request.student_id}")
     
+    # 1. Verify QR
     qr_service = get_qr_service()
     result = qr_service.verify_challenge(
         token=request.qr_token,
@@ -327,10 +407,12 @@ async def complete_exit(
     if not result.valid:
         raise HTTPException(status_code=400, detail=result.message)
     
+    # 2. Get student
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     
+    # 3. Get active session
     session = db.query(Session).filter(
         Session.student_id == student.id,
         Session.status == "active"
@@ -339,11 +421,28 @@ async def complete_exit(
     if not session:
         raise HTTPException(status_code=404, detail="No active session found")
     
+    # 4. ✅ Verify exit hash
+    chain_verified = False
+    if request.hash_chain_link and session.hash_chain_seed:
+        logger.info(f"🔐 Verifying exit hash...")
+        hash_service = HashChainService()
+        is_valid = hash_service.verify_exit_hash(
+            seed=session.hash_chain_seed,
+            provided_hash=request.hash_chain_link
+        )
+        
+        if is_valid:
+            chain_verified = True
+            logger.info(f"✅ Exit hash verified for session {session.session_id}")
+        else:
+            logger.warning(f"❌ Exit hash verification failed")
+    
+    # 5. Close session
     exit_timestamp = int(time.time())
     duration_seconds = exit_timestamp - int(session.entry_time.timestamp())
     
     session.exit_time = datetime.fromtimestamp(exit_timestamp)
-    session.status = "completed"
+    session.status = "completed" if chain_verified else "completed_with_anomaly"
     session.total_duration_seconds = duration_seconds
     
     db.commit()
@@ -354,7 +453,8 @@ async def complete_exit(
         "session_id": session.session_id,
         "duration_seconds": duration_seconds,
         "duration_minutes": duration_seconds // 60,
-        "message": "Exit successful"
+        "chain_verified": chain_verified,
+        "message": "Exit successful" + (" (hash chain verified)" if chain_verified else " (hash chain not verified)")
     }
 
 
@@ -435,6 +535,7 @@ async def get_active_session(
         "session": {
             "session_id": session.session_id,
             "entry_time": session.entry_time,
-            "duration_minutes": int((time.time() - session.entry_time.timestamp()) / 60)
+            "duration_minutes": int((time.time() - session.entry_time.timestamp()) / 60),
+            "hash_counter": session.hash_counter or 0
         }
     }

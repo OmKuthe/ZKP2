@@ -1,5 +1,5 @@
 // zkattend-mobile/app/screens/DashboardScreen.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,8 +15,10 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import QRCode from 'react-native-qrcode-svg';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { studentAPI } from '../api/client';
 import { RootStackParamList } from '../types/navigation';
+import { getCounterHash, getExitHash, getFirstHash } from '../utils/hashChain';
 
 type DashboardScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Dashboard'>;
 
@@ -29,6 +31,62 @@ type CheckInStatus =
   | 'scanning_qr' 
   | 'entry_complete' 
   | 'error';
+
+type ContinuityStatus = 'idle' | 'pending' | 'verified' | 'failed';
+
+interface VerificationLog {
+  time: string;
+  counter: number;
+  status: 'success' | 'failed';
+  message: string;
+}
+
+interface StoredChainData {
+  sessionId: string;
+  seed: string;
+  counter: number;
+  studentId: string;
+}
+
+// ==================== Storage Functions ====================
+
+async function saveChainData(data: StoredChainData): Promise<void> {
+  try {
+    const key = `chain_${data.sessionId}`;
+    await AsyncStorage.setItem(key, JSON.stringify(data));
+    console.log(`✅ Chain saved to storage: ${key}`);
+  } catch (error) {
+    console.error('❌ Failed to save chain:', error);
+  }
+}
+
+async function loadChainData(sessionId: string): Promise<StoredChainData | null> {
+  try {
+    const key = `chain_${sessionId}`;
+    const stored = await AsyncStorage.getItem(key);
+    if (stored) {
+      const data = JSON.parse(stored);
+      console.log(`✅ Chain loaded from storage: ${key}`);
+      return data;
+    }
+    return null;
+  } catch (error) {
+    console.error('❌ Failed to load chain:', error);
+    return null;
+  }
+}
+
+async function clearChainData(sessionId: string): Promise<void> {
+  try {
+    const key = `chain_${sessionId}`;
+    await AsyncStorage.removeItem(key);
+    console.log(`✅ Chain cleared from storage: ${key}`);
+  } catch (error) {
+    console.error('❌ Failed to clear chain:', error);
+  }
+}
+
+// ==================== Main Component ====================
 
 const DashboardScreen = () => {
   const route = useRoute();
@@ -45,6 +103,73 @@ const DashboardScreen = () => {
   const [statusMessage, setStatusMessage] = useState('');
   const [qrData, setQrData] = useState<any>(null);
   const [showQRModal, setShowQRModal] = useState(false);
+
+  // ==================== Hash Chain State (Counter-based) ====================
+  const [seed, setSeed] = useState<string | null>(null);
+  const [counter, setCounter] = useState<number>(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isChainGenerated, setIsChainGenerated] = useState(false);
+  const [continuityStatus, setContinuityStatus] = useState<ContinuityStatus>('idle');
+  const [verificationLogs, setVerificationLogs] = useState<VerificationLog[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+
+  // ==================== Refs for Continuity Check ====================
+  const sessionIdRef = useRef<string | null>(null);
+  const seedRef = useRef<string | null>(null);
+  const counterRef = useRef<number>(0);
+  const isChainGeneratedRef = useRef<boolean>(false);
+  const isCheckingIn = useRef<boolean>(false);
+
+  // Update refs when state changes
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    seedRef.current = seed;
+  }, [seed]);
+
+  useEffect(() => {
+    counterRef.current = counter;
+  }, [counter]);
+
+  useEffect(() => {
+    isChainGeneratedRef.current = isChainGenerated;
+  }, [isChainGenerated]);
+
+  // ==================== Load Stored Chain on App Start ====================
+  useEffect(() => {
+    const restoreChain = async () => {
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+        const chainKeys = keys.filter(k => k.startsWith('chain_'));
+        
+        for (const key of chainKeys) {
+          const stored = await AsyncStorage.getItem(key);
+          if (stored) {
+            const data: StoredChainData = JSON.parse(stored);
+            if (data.studentId === studentId) {
+              const response = await studentAPI.getActiveSession(studentId);
+              if (response.data.active) {
+                setSessionId(data.sessionId);
+                setSeed(data.seed);
+                setCounter(data.counter || 0);
+                setIsChainGenerated(true);
+                console.log(`✅ Restored chain for session ${data.sessionId}, counter ${data.counter}`);
+                break;
+              } else {
+                await clearChainData(data.sessionId);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('❌ Failed to restore chain:', error);
+      }
+    };
+    
+    restoreChain();
+  }, [studentId]);
 
   useEffect(() => {
     loadDashboard();
@@ -63,7 +188,22 @@ const DashboardScreen = () => {
   const loadActiveSession = async () => {
     try {
       const response = await studentAPI.getActiveSession(studentId);
-      setSession(response.data.active ? response.data.session : null);
+      if (response.data.active) {
+        setSession(response.data.session);
+        if (!sessionId) {
+          setSessionId(response.data.session.session_id);
+        }
+      } else {
+        if (!isCheckingIn.current && !isChainGeneratedRef.current) {
+          setSession(null);
+          setSessionId(null);
+          setSeed(null);
+          setCounter(0);
+          setIsChainGenerated(false);
+          setContinuityStatus('idle');
+          setVerificationLogs([]);
+        }
+      }
     } catch (error) {
       console.error('Error loading session:', error);
     }
@@ -98,6 +238,9 @@ const DashboardScreen = () => {
   };
 
   const handleLogout = () => {
+    if (sessionId) {
+      clearChainData(sessionId);
+    }
     Alert.alert(
       'Logout',
       'Are you sure you want to logout?',
@@ -112,6 +255,116 @@ const DashboardScreen = () => {
     );
   };
 
+  // ==================== Continuity Check ====================
+  const sendContinuityCheck = async () => {
+    const sid = sessionIdRef.current;
+    const seedVal = seedRef.current;
+    const currentCounter = counterRef.current;
+
+    console.log('🔍 Continuity check called. Status:', {
+      sessionId: sid,
+      seed: seedVal ? seedVal.substring(0, 16) + '...' : null,
+      counter: currentCounter,
+      isChainGenerated: isChainGeneratedRef.current
+    });
+
+    if (!sid || !seedVal) {
+      console.log('⚠️ No session ID or seed');
+      return;
+    }
+
+    if (!isChainGeneratedRef.current) {
+      console.log('⚠️ Chain not generated');
+      return;
+    }
+
+    // ✅ Get next hash
+    const nextCounter = currentCounter + 1;
+    const hash = await getCounterHash(seedVal, nextCounter);
+    console.log(`📡 Sending continuity check #${nextCounter}`);
+
+    setContinuityStatus('pending');
+    
+    try {
+      const response = await studentAPI.verifyContinuity(sid, hash);
+      
+      const logEntry: VerificationLog = {
+        time: new Date().toLocaleTimeString(),
+        counter: nextCounter,
+        status: response.data.verified ? 'success' : 'failed',
+        message: response.data.verified 
+          ? `✅ Check ${nextCounter} verified` 
+          : `❌ ${response.data.message}`,
+      };
+      
+      setVerificationLogs(prev => [...prev, logEntry]);
+      
+      if (response.data.verified) {
+        setCounter(nextCounter);
+        counterRef.current = nextCounter;
+        // ✅ Save to storage
+        await saveChainData({
+          sessionId: sid,
+          seed: seedVal,
+          counter: nextCounter,
+          studentId: studentId,
+        });
+        setContinuityStatus('verified');
+        console.log(`✅ Continuity check #${nextCounter} passed`);
+      } else {
+        setContinuityStatus('failed');
+        console.log(`❌ Continuity check failed: ${response.data.message}`);
+      }
+    } catch (error) {
+      console.error('❌ Continuity check error:', error);
+      setContinuityStatus('failed');
+    }
+  };
+
+  // ==================== Verify First Hash (h1) ====================
+  const verifyFirstHash = async (sid: string, seedVal: string) => {
+    console.log(`🔐 Verifying first hash (counter: 1)...`);
+    
+    const hash = await getCounterHash(seedVal, 1);
+    console.log(`📡 Sending first hash: ${hash.substring(0, 16)}...`);
+    
+    try {
+      const response = await studentAPI.verifyContinuity(sid, hash);
+      
+      if (response.data.verified) {
+        console.log('✅ First hash verified successfully!');
+        setCounter(1);
+        counterRef.current = 1;
+        await saveChainData({
+          sessionId: sid,
+          seed: seedVal,
+          counter: 1,
+          studentId: studentId,
+        });
+        setVerificationLogs(prev => [...prev, {
+          time: new Date().toLocaleTimeString(),
+          counter: 1,
+          status: 'success',
+          message: '✅ First hash verified - Chain confirmed!',
+        }]);
+        return true;
+      } else {
+        console.log('❌ First hash verification failed:', response.data.message);
+        setVerificationLogs(prev => [...prev, {
+          time: new Date().toLocaleTimeString(),
+          counter: 1,
+          status: 'failed',
+          message: '❌ First hash verification failed!',
+        }]);
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ First hash verification error:', error);
+      return false;
+    }
+  };
+
+  // ==================== Check In ====================
   const handleCheckIn = async () => {
     if (!internship) {
       Alert.alert('No Internship', 'You are not assigned to any active internship.');
@@ -127,6 +380,7 @@ const DashboardScreen = () => {
       return;
     }
 
+    isCheckingIn.current = true;
     setCheckInStatus('requesting_location');
     setStatusMessage('📍 Requesting location...');
     setLoading(true);
@@ -138,6 +392,7 @@ const DashboardScreen = () => {
         setStatusMessage('❌ Location permission denied');
         Alert.alert('Permission Denied', 'Location permission is required.');
         setLoading(false);
+        isCheckingIn.current = false;
         return;
       }
 
@@ -149,7 +404,6 @@ const DashboardScreen = () => {
       setStatusMessage('🔍 Verifying location with ZKP...');
       setCheckInStatus('verifying_location');
 
-      // ✅ Send GPS to backend - backend generates and verifies ZKP
       const response = await studentAPI.startEntry(
         studentId,
         location.coords.latitude,
@@ -163,16 +417,15 @@ const DashboardScreen = () => {
         setStatusMessage(`❌ ${data.message}`);
         Alert.alert('Location Verification Failed', data.message);
         setLoading(false);
+        isCheckingIn.current = false;
         return;
       }
 
-      // ✅ QR received
       setStatusMessage('📱 QR generated! Verifying with server...');
       setCheckInStatus('qr_received');
       setQrData(data.qr_data);
       setShowQRModal(true);
 
-      // ✅ Complete entry automatically
       setTimeout(async () => {
         setStatusMessage('🔐 Completing entry...');
         setCheckInStatus('scanning_qr');
@@ -183,18 +436,74 @@ const DashboardScreen = () => {
             data.qr_data.company_id,
             data.qr_data.token
           );
+          
+          console.log('📦 Full entry response:', JSON.stringify(entryResponse.data, null, 2));
+          
+          const newSessionId = entryResponse.data.session_id;
+          const newSeed = entryResponse.data.seed;
+          
+          if (!newSeed) {
+            console.log('⚠️ No seed from backend');
+            throw new Error('No seed received from backend');
+          }
+
+          setSessionId(newSessionId);
+          sessionIdRef.current = newSessionId;
+          setSeed(newSeed);
+          seedRef.current = newSeed;
+          setIsChainGenerated(true);
+          isChainGeneratedRef.current = true;
+          setContinuityStatus('idle');
+          setVerificationLogs([{
+            time: new Date().toLocaleTimeString(),
+            counter: 0,
+            status: 'success',
+            message: '✅ Session started',
+          }]);
+          console.log(`✅ Seed received: ${newSeed.substring(0, 16)}...`);
+
+          // ✅ Save to storage
+          await saveChainData({
+            sessionId: newSessionId,
+            seed: newSeed,
+            counter: 0,
+            studentId: studentId,
+          });
 
           setCheckInStatus('entry_complete');
           setStatusMessage('✅ Check-in successful!');
           setShowQRModal(false);
           
-          Alert.alert('✅ Check In Successful', 'Entry verified with ZKP!');
-          await refreshAll();
+          Alert.alert('✅ Check In Successful', 'Entry verified with ZKP! Hash chain started.');
+
+          // ✅ Verify first hash (counter: 1)
+          setTimeout(async () => {
+            console.log('🔐 Verifying first hash...');
+            const verified = await verifyFirstHash(newSessionId, newSeed);
+            if (verified) {
+              console.log('✅ First hash verified!');
+            } else {
+              console.log('⚠️ First hash verification failed.');
+            }
+          }, 2000);
+
+          // ✅ Schedule next continuity check
+          setTimeout(() => {
+            console.log('⏰ Running scheduled continuity check');
+            sendContinuityCheck();
+          }, 8000);
+
+          setTimeout(async () => {
+            await loadActiveSession();
+            isCheckingIn.current = false;
+          }, 10000);
+
         } catch (error: any) {
           console.error('❌ Entry error:', error);
           setCheckInStatus('error');
           setStatusMessage(`❌ ${error.message}`);
           Alert.alert('Check-in Failed', error.response?.data?.detail || error.message);
+          isCheckingIn.current = false;
         }
       }, 3000);
 
@@ -203,11 +512,13 @@ const DashboardScreen = () => {
       setCheckInStatus('error');
       setStatusMessage(`❌ ${error.message}`);
       Alert.alert('Error', error.response?.data?.detail || 'Failed to check in.');
+      isCheckingIn.current = false;
     } finally {
       setLoading(false);
     }
   };
 
+  // ==================== Check Out ====================
   const handleCheckOut = async () => {
     if (!session) {
       Alert.alert('No Active Session', 'You are not checked in.');
@@ -254,20 +565,59 @@ const DashboardScreen = () => {
         setCheckInStatus('scanning_qr');
 
         try {
+          const seedVal = seedRef.current;
+          let finalHash = null;
+          
+          if (seedVal) {
+            finalHash = await getExitHash(seedVal);
+            console.log(`📤 Sending exit hash`);
+          }
+
           const exitResponse = await studentAPI.completeExit(
             studentId,
             data.qr_data.company_id,
-            data.qr_data.token
+            data.qr_data.token,
+            finalHash || undefined
           );
 
           setCheckInStatus('entry_complete');
           setStatusMessage('✅ Check-out successful!');
           setShowQRModal(false);
           
-          Alert.alert(
-            '✅ Check Out Successful',
-            `Duration: ${exitResponse.data.duration_minutes} minutes`
-          );
+          if (exitResponse.data.chain_verified) {
+            setVerificationLogs(prev => [...prev, {
+              time: new Date().toLocaleTimeString(),
+              counter: -1,
+              status: 'success',
+              message: '✅ Session completed successfully',
+            }]);
+            Alert.alert(
+              '✅ Check Out Successful',
+              `Duration: ${exitResponse.data.duration_minutes} minutes\n✅ Hash chain verified!`
+            );
+          } else {
+            setVerificationLogs(prev => [...prev, {
+              time: new Date().toLocaleTimeString(),
+              counter: -1,
+              status: 'failed',
+              message: '⚠️ Session completed with anomaly',
+            }]);
+            Alert.alert(
+              '⚠️ Check Out Completed',
+              `Duration: ${exitResponse.data.duration_minutes} minutes\n⚠️ Hash chain could not be verified.`,
+              [{ text: 'OK' }]
+            );
+          }
+          
+          if (sessionId) {
+            await clearChainData(sessionId);
+          }
+          
+          setSeed(null);
+          setCounter(0);
+          setIsChainGenerated(false);
+          setContinuityStatus('idle');
+          
           await refreshAll();
         } catch (error: any) {
           setCheckInStatus('error');
@@ -285,10 +635,40 @@ const DashboardScreen = () => {
     }
   };
 
+  const handleManualContinuityCheck = () => {
+    if (!session) {
+      Alert.alert('No Active Session', 'You are not checked in.');
+      return;
+    }
+    if (!isChainGenerated || !seed) {
+      Alert.alert('No Hash Chain', 'Hash chain not generated yet.');
+      return;
+    }
+    sendContinuityCheck();
+  };
+
   const getStatusText = () => {
     if (session) return '✅ Checked In';
     if (internship?.can_start) return '🔵 Ready to Check In';
     return internship?.status_message || 'No Active Internship';
+  };
+
+  const getContinuityDisplay = () => {
+    if (!session) return null;
+    if (!isChainGenerated) return '⏳ Generating...';
+    if (continuityStatus === 'pending') return '🔄 Verifying...';
+    if (continuityStatus === 'verified') return '✅ Verified';
+    if (continuityStatus === 'failed') return '⚠️ Anomaly Detected';
+    return `🔗 Counter: ${counter}`;
+  };
+
+  const getContinuityColor = () => {
+    if (!session) return '#94a3b8';
+    if (!isChainGenerated) return '#f59e0b';
+    if (continuityStatus === 'pending') return '#f59e0b';
+    if (continuityStatus === 'verified') return '#16A34A';
+    if (continuityStatus === 'failed') return '#DC2626';
+    return '#4F46E5';
   };
 
   const isWithinHours = isWithinInternshipHours();
@@ -308,7 +688,43 @@ const DashboardScreen = () => {
         <Text style={styles.headerSubtitle}>
           {studentName || studentId}
         </Text>
+        
+        {session && (
+          <View style={styles.continuityRow}>
+            <View style={[styles.continuityDot, { backgroundColor: getContinuityColor() }]} />
+            <Text style={styles.continuityText}>
+              {getContinuityDisplay()}
+            </Text>
+            <TouchableOpacity 
+              onPress={() => setShowLogs(!showLogs)} 
+              style={styles.logsToggle}
+            >
+              <Text style={styles.logsToggleText}>
+                {showLogs ? 'Hide Logs' : 'View Logs'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
+
+      {showLogs && verificationLogs.length > 0 && (
+        <View style={styles.logsContainer}>
+          <Text style={styles.logsTitle}>Verification History</Text>
+          {verificationLogs.map((log, index) => (
+            <View key={index} style={styles.logItem}>
+              <Text style={styles.logTime}>{log.time}</Text>
+              <Text style={styles.logCounter}>#{log.counter}</Text>
+              <Text style={[
+                styles.logStatus,
+                log.status === 'success' ? styles.logSuccess : styles.logFailed
+              ]}>
+                {log.status === 'success' ? '✅' : '❌'}
+              </Text>
+              <Text style={styles.logMessage}>{log.message}</Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Today's Status</Text>
@@ -393,10 +809,22 @@ const DashboardScreen = () => {
         >
           <Text style={styles.buttonText}>Check Out</Text>
         </TouchableOpacity>
+
+        {session && isChainGenerated && (
+          <TouchableOpacity
+            style={[styles.button, styles.continuityButton]}
+            onPress={handleManualContinuityCheck}
+            disabled={loading || !isChainGenerated}
+          >
+            <Text style={styles.buttonText}>🔄 Verify Continuity</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <Text style={styles.footer}>
-        {internship?.is_paid ? '💰 Paid Internship' : '📋 Internship Active'}
+        {session && isChainGenerated 
+          ? `🔗 Counter: ${counter}` 
+          : internship?.is_paid ? '💰 Paid Internship' : '📋 Internship Active'}
       </Text>
 
       {/* QR Modal */}
@@ -412,7 +840,7 @@ const DashboardScreen = () => {
               {qrData?.purpose === 'entry' ? '📱 Entry QR Code' : '📱 Exit QR Code'}
             </Text>
             <Text style={styles.modalSubtitle}>
-              Verifying with server...
+              {checkInStatus === 'qr_received' ? 'QR generated! Verifying...' : 'Processing...'}
             </Text>
             
             <View style={styles.qrContainer}>
@@ -466,6 +894,80 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
   headerSubtitle: { fontSize: 14, color: '#c7d2fe', marginTop: 4 },
+  continuityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 8,
+  },
+  continuityDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  continuityText: {
+    color: '#c7d2fe',
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+  },
+  logsToggle: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 12,
+  },
+  logsToggleText: {
+    color: '#c7d2fe',
+    fontSize: 11,
+  },
+  logsContainer: {
+    backgroundColor: '#1e1b4b',
+    margin: 12,
+    marginTop: 0,
+    padding: 12,
+    borderRadius: 8,
+  },
+  logsTitle: {
+    color: '#a5b4fc',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  logItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  logTime: {
+    color: '#94a3b8',
+    fontSize: 10,
+    width: 60,
+  },
+  logCounter: {
+    color: '#94a3b8',
+    fontSize: 10,
+    width: 40,
+    textAlign: 'center',
+  },
+  logStatus: {
+    fontSize: 12,
+    width: 24,
+    textAlign: 'center',
+  },
+  logSuccess: {
+    color: '#16A34A',
+  },
+  logFailed: {
+    color: '#DC2626',
+  },
+  logMessage: {
+    color: '#e2e8f0',
+    fontSize: 11,
+    flex: 1,
+  },
   logoutButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
     paddingHorizontal: 16,
@@ -533,6 +1035,7 @@ const styles = StyleSheet.create({
   button: { borderRadius: 12, padding: 16, alignItems: 'center' },
   checkInButton: { backgroundColor: '#4F46E5' },
   checkOutButton: { backgroundColor: '#DC2626' },
+  continuityButton: { backgroundColor: '#8B5CF6' },
   buttonDisabled: { opacity: 0.4 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   footer: { textAlign: 'center', color: '#666', fontSize: 12, padding: 16 },

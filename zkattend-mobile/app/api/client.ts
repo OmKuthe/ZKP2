@@ -57,17 +57,26 @@ export const studentAPI = {
       longitude
     }),
   
-  // Complete exit with QR
-  completeExit: (studentId: string, companyId: number, qrToken: string) =>
+  // Complete exit with QR - NOW WITH HASH CHAIN LINK
+  completeExit: (studentId: string, companyId: number, qrToken: string, hashLink?: string) =>
     api.post('/student/complete-exit', {
       student_id: studentId,
       company_id: companyId,
-      qr_token: qrToken
+      qr_token: qrToken,
+      hash_chain_link: hashLink, // ✅ Phase 2B: Hash chain link
     }),
   
   // Get active session
   getActiveSession: (studentId: string) =>
-    api.get(`/student/active-session/${studentId}`)
+    api.get(`/student/active-session/${studentId}`),
+  
+  // ✅ Phase 2B: Verify continuity with counter-based hash
+  verifyContinuity: (sessionId: string, hashLink: string) =>
+    api.post('/student/verify-continuity', {
+      session_id: sessionId,
+      hash_link: hashLink,
+      timestamp: Math.floor(Date.now() / 1000),
+    }),
 };
 
 export default api;

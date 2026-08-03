@@ -3,7 +3,8 @@
 Student schemas
 """
 from pydantic import BaseModel, EmailStr
-from typing import Optional, Dict ,Any
+from typing import Optional, Dict, Any
+
 
 # ---------- Student CRUD ----------
 
@@ -13,7 +14,8 @@ class StudentCreate(BaseModel):
     email: EmailStr
     password: str
     company_id: Optional[int] = None
-    
+
+
 class StudentResponse(BaseModel):
     """Student response"""
     id: int
@@ -36,6 +38,7 @@ class StudentUpdate(BaseModel):
 
 
 # ---------- GPS Verification ----------
+
 class GPSVerificationRequest(BaseModel):
     student_id: str
     latitude: float
@@ -45,21 +48,39 @@ class GPSVerificationRequest(BaseModel):
 class GPSVerificationResponse(BaseModel):
     verified: bool
     message: str
-    distance: float
-    max_distance: float
+    distance: Optional[float] = None
+    max_distance: Optional[float] = None
     qr_token: Optional[str] = None
     qr_payload: Optional[Dict] = None
 
 
 # ---------- Student Entry / Exit ----------
+
 class StudentEntryRequest(BaseModel):
     student_id: str
     company_id: int
     qr_token: str
     zk_proof: Optional[Dict[str, Any]] = None
+    hash_chain_link: Optional[str] = None  # ✅ For exit verification
 
 
 class StudentEntryResponse(BaseModel):
     session_id: str
     message: str
     entry_time: int
+    seed: Optional[str] = None  # ✅ For app to generate hashes
+
+
+# ---------- ✅ Phase 2B: Continuity Check ----------
+
+class ContinuityCheckRequest(BaseModel):
+    session_id: str
+    hash_link: str
+    timestamp: int
+
+
+class ContinuityCheckResponse(BaseModel):
+    verified: bool
+    message: str
+    next_check_seconds: int
+    current_index: int
