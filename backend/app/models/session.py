@@ -40,6 +40,7 @@ class Session(Base):
     # Phase 2C: Environment commitment (future)
     # ========================================
     environment_commitment = Column(String, nullable=True)
+    environment_features = Column(Text, nullable=True)
     
     # ========================================
     # Session status

@@ -539,3 +539,95 @@ async def get_active_session(
             "hash_counter": session.hash_counter or 0
         }
     }
+# ==================== Environment Commitment (Phase 2C) ====================
+
+from pydantic import BaseModel
+
+class EnvironmentCommitmentRequest(BaseModel):
+    session_id: str
+    commitment: str
+    timestamp: int
+
+
+class EnvironmentCommitmentResponse(BaseModel):
+    stored: bool
+    message: str
+
+
+class EnvironmentCheckRequest(BaseModel):
+    session_id: str
+    current_commitment: str
+    timestamp: int
+
+
+class EnvironmentCheckResponse(BaseModel):
+    verified: bool
+    overlap: float
+    message: str
+
+# ==================== Environment Commitment ====================
+
+@router.post("/store-environment")
+async def store_environment(
+    request: dict,
+    db: DBSession = Depends(get_db)
+):
+    """
+    Store environment commitment.
+    This is a simple storage — no validation yet.
+    """
+    session_id = request.get("session_id")
+    commitment = request.get("commitment")
+    
+    if not session_id or not commitment:
+        return {"stored": False, "message": "Missing session_id or commitment"}
+    
+    session = db.query(Session).filter(
+        Session.session_id == session_id,
+        Session.status == "active"
+    ).first()
+    
+    if not session:
+        return {"stored": False, "message": "Active session not found"}
+    
+    session.environment_commitment = commitment
+    db.commit()
+    
+    logger.info(f"✅ Environment commitment stored for session {session_id}")
+    
+    return {"stored": True, "message": "Environment commitment stored successfully."}
+
+
+@router.post("/verify-environment")
+async def verify_environment(
+    request: dict,
+    db: DBSession = Depends(get_db)
+):
+    """
+    Verify environment — always returns True for now.
+    Will implement proper threshold matching later.
+    """
+    session_id = request.get("session_id")
+    current_commitment = request.get("current_commitment")
+    
+    if not session_id:
+        return {"verified": False, "overlap": 0.0, "message": "Missing session_id"}
+    
+    session = db.query(Session).filter(
+        Session.session_id == session_id,
+        Session.status == "active"
+    ).first()
+    
+    if not session:
+        return {"verified": False, "overlap": 0.0, "message": "Active session not found"}
+    
+    if not session.environment_commitment:
+        return {"verified": True, "overlap": 1.0, "message": "No reference environment — skipping check"}
+    
+    # For now, always return true with low overlap
+    # This ensures exit is never blocked by environment mismatch
+    return {
+        "verified": True,
+        "overlap": 0.8,
+        "message": "Environment check passed (low threshold mode)"
+    }

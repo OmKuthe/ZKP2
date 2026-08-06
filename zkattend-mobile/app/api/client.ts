@@ -63,7 +63,7 @@ export const studentAPI = {
       student_id: studentId,
       company_id: companyId,
       qr_token: qrToken,
-      hash_chain_link: hashLink, // ✅ Phase 2B: Hash chain link
+      hash_chain_link: hashLink,
     }),
   
   // Get active session
@@ -75,6 +75,22 @@ export const studentAPI = {
     api.post('/student/verify-continuity', {
       session_id: sessionId,
       hash_link: hashLink,
+      timestamp: Math.floor(Date.now() / 1000),
+    }),
+
+  // ✅ Phase 2C: Environment commitment
+  storeEnvironment: (sessionId: string, commitment: string) =>
+    api.post('/student/store-environment', {
+      session_id: sessionId,
+      commitment: commitment,
+      timestamp: Math.floor(Date.now() / 1000),
+    }),
+
+  // ✅ Phase 2C: Verify environment
+  verifyEnvironment: (sessionId: string, commitment: string) =>
+    api.post('/student/verify-environment', {
+      session_id: sessionId,
+      current_commitment: commitment,
       timestamp: Math.floor(Date.now() / 1000),
     }),
 };

@@ -36,7 +36,9 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      "react-native-wifi-reborn",
+      "expo-ble"
     ]
   }
 }

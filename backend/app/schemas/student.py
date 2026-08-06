@@ -84,3 +84,27 @@ class ContinuityCheckResponse(BaseModel):
     message: str
     next_check_seconds: int
     current_index: int
+
+# ==================== Environment Commitment ====================
+
+class EnvironmentCommitmentRequest(BaseModel):
+    session_id: str
+    commitment: str
+    timestamp: int
+
+
+class EnvironmentCommitmentResponse(BaseModel):
+    stored: bool
+    message: str
+
+
+class EnvironmentCheckRequest(BaseModel):
+    session_id: str
+    current_commitment: str
+    timestamp: int
+
+
+class EnvironmentCheckResponse(BaseModel):
+    verified: bool
+    overlap: float
+    message: str
