@@ -90,7 +90,6 @@ async def get_companies(
         limit=limit,
     )
 
-
 @router.get("/companies/{company_id}", response_model=CompanyResponse)
 async def get_company(
     company_id: int,
@@ -260,6 +259,7 @@ async def delete_student(
     db.commit()
     
     return {"message": f"Student {student_id} deleted successfully"}
+
 # ==================== Dashboard Stats ====================
 
 @router.get("/dashboard/stats", response_model=DashboardStats)

@@ -10,7 +10,7 @@ import time
 import uuid
 import logging
 
-from ...models import Student, Internship, InternshipAssignment, Session, Company
+from ...models import Student, Internship, InternshipAssignment, Session, Company, ContinuityCheck
 from ...core.database import get_db
 from ...schemas.student import (
     StudentEntryRequest,
@@ -229,6 +229,7 @@ async def complete_entry(
         hash_chain_seed=seed,
         hash_counter=0,
         hash_chain_length=100,
+        check_interval_seconds=60,  # ✅ Default: 1 minute
         status="active"
     )
     
@@ -255,6 +256,7 @@ async def verify_continuity(
 ):
     """
     Verify continuity using counter-based approach.
+    ✅ Stores each check in the database for tracking.
     """
     logger.info(f"🔍 Continuity check for session: {request.session_id}")
     
@@ -281,19 +283,35 @@ async def verify_continuity(
         provided_hash=request.hash_link
     )
     
+    # 4. ✅ Store continuity check in database
+    status = "verified" if is_valid else "failed"
+    message = "Hash chain verification passed" if is_valid else "Hash chain verification failed"
+    
+    check = ContinuityCheck(
+        session_id=session.id,
+        check_time=datetime.fromtimestamp(request.timestamp),
+        check_number=next_counter,
+        hash_link=request.hash_link,
+        hash_link_valid=is_valid,
+        status=status,
+        message=message
+    )
+    db.add(check)
+    
     if not is_valid:
         logger.warning(f"❌ Hash verification failed for session {request.session_id}")
         logger.warning(f"   Expected: {hash_service.get_hash(session.hash_chain_seed, next_counter)}")
         logger.warning(f"   Received: {request.hash_link}")
         
+        db.commit()
         return ContinuityCheckResponse(
             verified=False,
             message="Hash verification failed. Session flagged for review.",
-            next_check_seconds=60,
+            next_check_seconds=session.check_interval_seconds or 60,
             current_index=session.hash_counter
         )
     
-    # 4. Update session
+    # 5. Update session
     session.hash_counter = next_counter
     session.last_hash_check = datetime.fromtimestamp(request.timestamp)
     db.commit()
@@ -304,9 +322,54 @@ async def verify_continuity(
     return ContinuityCheckResponse(
         verified=True,
         message=f"Continuity verified successfully. Counter: {session.hash_counter}",
-        next_check_seconds=60,
+        next_check_seconds=session.check_interval_seconds or 60,
         current_index=session.hash_counter
     )
+
+
+# ==================== Get Continuity Checks ====================
+
+@router.get("/session/checks/{session_id}")
+async def get_continuity_checks(
+    session_id: str,
+    db: DBSession = Depends(get_db)
+):
+    """
+    ✅ NEW: Get all continuity checks for a session.
+    Used for the tracking timeline.
+    """
+    # Get session
+    session = db.query(Session).filter(
+        Session.session_id == session_id
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Get all checks for this session
+    checks = db.query(ContinuityCheck).filter(
+        ContinuityCheck.session_id == session.id
+    ).order_by(ContinuityCheck.check_number.asc()).all()
+    
+    return {
+        "session_id": session_id,
+        "entry_time": session.entry_time,
+        "exit_time": session.exit_time,
+        "status": session.status,
+        "checks": [
+            {
+                "id": c.id,
+                "check_number": c.check_number,
+                "check_time": c.check_time,
+                "status": c.status,
+                "hash_link": c.hash_link,
+                "hash_link_valid": c.hash_link_valid,
+                "message": c.message
+            }
+            for c in checks
+        ],
+        "total": len(checks)
+    }
 
 
 # ==================== Start Exit ====================
@@ -539,6 +602,8 @@ async def get_active_session(
             "hash_counter": session.hash_counter or 0
         }
     }
+
+
 # ==================== Environment Commitment (Phase 2C) ====================
 
 from pydantic import BaseModel
@@ -565,7 +630,6 @@ class EnvironmentCheckResponse(BaseModel):
     overlap: float
     message: str
 
-# ==================== Environment Commitment ====================
 
 @router.post("/store-environment")
 async def store_environment(

@@ -9,8 +9,17 @@ from .core.config import settings
 from .core.database import engine, Base
 
 # Import all models so they get registered
-from .models import Company, Student, Session, ContinuityCheck, Anomaly
-
+from .models import (
+    Company,
+    Student,
+    Session,
+    ContinuityCheck,
+    Anomaly,
+    Internship,
+    InternshipAssignment,
+    WiFiTemplate,       
+    WiFiVerification,   
+)
 # Import API router
 from .api import router as api_router
 

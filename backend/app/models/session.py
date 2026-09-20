@@ -2,6 +2,7 @@
 """
 Session model - Stores active attendance sessions
 Includes Phase 2B: Hash Chain fields (Counter-based)
+Includes Wi-Fi Fingerprinting fields
 """
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Boolean
 from sqlalchemy.sql import func
@@ -31,21 +32,31 @@ class Session(Base):
     # ========================================
     # Phase 2B: Counter-based Hash Chain fields
     # ========================================
-    hash_chain_seed = Column(String, nullable=True)      # Random seed for hash chain
-    hash_counter = Column(Integer, default=0)            # Current counter value
-    hash_chain_length = Column(Integer, default=100)     # Max checks (optional)
-    last_hash_check = Column(DateTime(timezone=True), nullable=True)  # Last continuity check
+    hash_chain_seed = Column(String, nullable=True)
+    hash_counter = Column(Integer, default=0)
+    hash_chain_length = Column(Integer, default=100)
+    last_hash_check = Column(DateTime(timezone=True), nullable=True)
+    check_interval_seconds = Column(Integer, default=60)
     
     # ========================================
-    # Phase 2C: Environment commitment (future)
+    # Phase 2C: Environment commitment
     # ========================================
     environment_commitment = Column(String, nullable=True)
     environment_features = Column(Text, nullable=True)
     
     # ========================================
+    # ✅ NEW: Wi-Fi Fingerprinting fields
+    # ========================================
+    last_wifi_score = Column(Float, nullable=True)              # Last JSR score [0,1]
+    last_wifi_check = Column(DateTime(timezone=True), nullable=True)
+    wifi_fail_count = Column(Integer, default=0)                # Consecutive failures
+    wifi_verified_count = Column(Integer, default=0)            # Total successes
+    has_wifi_template = Column(Boolean, default=False)          # Was template captured?
+    
+    # ========================================
     # Session status
     # ========================================
-    status = Column(String, default="active")  # active | completed | completed_with_anomaly | flagged
+    status = Column(String, default="active")
     
     # Duration
     total_duration_seconds = Column(Float, nullable=True)
@@ -57,6 +68,20 @@ class Session(Base):
     # Relationships
     student = relationship("Student", back_populates="sessions")
     company = relationship("Company", back_populates="sessions")
+    continuity_checks = relationship("ContinuityCheck", back_populates="session")
+    
+    # ✅ NEW: Wi-Fi relationships
+    wifi_template = relationship(
+        "WiFiTemplate",
+        back_populates="session",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
+    wifi_verifications = relationship(
+        "WiFiVerification",
+        back_populates="session",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Session(id={self.id}, session_id='{self.session_id}', status='{self.status}')>"

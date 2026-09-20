@@ -1,72 +1,108 @@
 // zkattend-mobile/app/native/environment.ts
-import * as Location from 'expo-location';
-import * as Network from 'expo-network';
+/**
+ * Environment capture — now uses REAL Wi-Fi scanning.
+ *
+ * This module replaces the old GPS-based placeholder.
+ * It captures the measurable Wi-Fi environment around the user.
+ */
+import {
+  scanWifiNetworks,
+  scanMultipleTimes,
+  requestWifiPermissions,
+  ScannedAP,
+} from './wifi-scanner';
 
 export interface EnvironmentData {
-  bssids: string[];
-  ssids: string[];
+  /** List of nearby access points (real Wi-Fi data) */
+  aps: ScannedAP[];
+  /** When the capture happened */
   timestamp: number;
+  /** How many scan rounds were performed */
+  scan_rounds: number;
+  /** Whether the data is considered usable */
+  is_usable: boolean;
 }
 
 /**
- * Capture current environment — simplified version
- * Uses location + network state
+ * Capture a single Wi-Fi environment snapshot.
+ * Used for periodic verification during an active session.
  */
 export async function captureEnvironment(): Promise<EnvironmentData> {
   try {
-    const features: string[] = [];
+    const aps = await scanWifiNetworks();
+    const is_usable = aps.length >= 1;
 
-    // 1. Get location (rounded to 2 decimal places ≈ 1.1km)
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status === 'granted') {
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      // Round to 2 decimal places (≈ 1.1km) — low precision for privacy
-      const lat = location.coords.latitude.toFixed(2);
-      const lng = location.coords.longitude.toFixed(2);
-      features.push(`loc_${lat}_${lng}`);
-      console.log(`📍 Location: ${lat}, ${lng}`);
-    } else {
-      features.push('no_location');
-    }
-
-    // 2. Get network state
-    try {
-      const networkState = await Network.getNetworkStateAsync();
-      if (networkState.isConnected) {
-        features.push('connected');
-      }
-      if (networkState.type) {
-        features.push(`type_${networkState.type}`);
-      }
-    } catch (e) {
-      features.push('no_network');
-    }
-
-    // 3. Always return something
-    if (features.length === 0) {
-      features.push('default_env');
-    }
-
-    console.log(`📶 Environment captured: ${features.length} features`);
+    console.log(
+      `📶 Environment captured: ${aps.length} APs (usable: ${is_usable})`
+    );
 
     return {
-      bssids: features,
-      ssids: [],
+      aps,
       timestamp: Date.now(),
+      scan_rounds: 1,
+      is_usable,
     };
   } catch (error) {
     console.error('❌ Failed to capture environment:', error);
-    // Return a fallback so flow continues
     return {
-      bssids: ['fallback'],
-      ssids: [],
+      aps: [],
       timestamp: Date.now(),
+      scan_rounds: 0,
+      is_usable: false,
     };
   }
 }
 
-export function isEnvironmentCaptureAvailable(): boolean {
-  return true;
+/**
+ * Capture a robust template for enrollment.
+ * Takes multiple scans over a short window and returns them all.
+ * The backend will aggregate them (median RSSI per AP).
+ */
+export async function captureTemplate(
+  scanCount: number = 3,
+  intervalMs: number = 2000
+): Promise<EnvironmentData> {
+  try {
+    const scans = await scanMultipleTimes(scanCount, intervalMs);
+    const allAps = scans.flat();
+
+    const uniqueBssids = new Set(allAps.map((ap) => ap.bssid));
+    const is_usable = uniqueBssids.size >= 6;
+
+    console.log(
+      `📶 Template captured: ${scans.length} rounds, ${uniqueBssids.size} unique APs (usable: ${is_usable})`
+    );
+
+    return {
+      aps: allAps,
+      timestamp: Date.now(),
+      scan_rounds: scans.length,
+      is_usable,
+    };
+  } catch (error) {
+    console.error('❌ Failed to capture template:', error);
+    return {
+      aps: [],
+      timestamp: Date.now(),
+      scan_rounds: 0,
+      is_usable: false,
+    };
+  }
 }
+
+/**
+ * Check whether Wi-Fi scanning is available on this platform.
+ */
+export function isEnvironmentCaptureAvailable(): boolean {
+  const { Platform } = require('react-native');
+  return Platform.OS === 'android';
+}
+
+/**
+ * Ask for permissions before any capture.
+ */
+export async function ensureEnvironmentPermissions(): Promise<boolean> {
+  return await requestWifiPermissions();
+}
+
+export type { ScannedAP };

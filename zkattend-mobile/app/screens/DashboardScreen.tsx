@@ -20,19 +20,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { studentAPI } from '../api/client';
 import { RootStackParamList } from '../types/navigation';
 import { getCounterHash, getExitHash } from '../utils/hashChain';
-import { captureEnvironment } from '../native/environment';
-import { generateCommitment, generateSalt } from '../utils/commitment';
 
-type DashboardScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Dashboard'>;
+// ============================================================
+// Wi-Fi Fingerprinting imports (NEW)
+// ============================================================
+import {
+  captureEnvironment,
+  captureTemplate,
+  ensureEnvironmentPermissions,
+} from '../native/environment';
+import { toAPList } from '../utils/commitment';
+import { WIFI_CONFIG } from '../utils/constants';
 
-type CheckInStatus = 
-  | 'idle' 
-  | 'requesting_location' 
-  | 'verifying_location' 
-  | 'requesting_qr' 
-  | 'qr_received' 
-  | 'scanning_qr' 
-  | 'entry_complete' 
+import TrackingTimeline from '../components/TrackingTimeline';
+
+type DashboardScreenNavigationProp = NativeStackNavigationProp<
+  RootStackParamList,
+  'Dashboard'
+>;
+
+type CheckInStatus =
+  | 'idle'
+  | 'requesting_location'
+  | 'verifying_location'
+  | 'requesting_qr'
+  | 'qr_received'
+  | 'scanning_qr'
+  | 'entry_complete'
   | 'error';
 
 type ContinuityStatus = 'idle' | 'pending' | 'verified' | 'failed';
@@ -41,6 +55,16 @@ interface VerificationLog {
   time: string;
   counter: number;
   status: 'success' | 'failed' | 'info';
+  message: string;
+}
+
+interface ContinuityCheck {
+  id: number;
+  check_number: number;
+  check_time: string;
+  status: string;
+  hash_link: string;
+  hash_link_valid: boolean;
   message: string;
 }
 
@@ -63,7 +87,9 @@ async function saveChainData(data: StoredChainData): Promise<void> {
   }
 }
 
-async function loadChainData(sessionId: string): Promise<StoredChainData | null> {
+async function loadChainData(
+  sessionId: string
+): Promise<StoredChainData | null> {
   try {
     const key = `chain_${sessionId}`;
     const stored = await AsyncStorage.getItem(key);
@@ -112,13 +138,27 @@ const DashboardScreen = () => {
   const [counter, setCounter] = useState<number>(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isChainGenerated, setIsChainGenerated] = useState(false);
-  const [continuityStatus, setContinuityStatus] = useState<ContinuityStatus>('idle');
-  const [verificationLogs, setVerificationLogs] = useState<VerificationLog[]>([]);
+  const [continuityStatus, setContinuityStatus] =
+    useState<ContinuityStatus>('idle');
+  const [verificationLogs, setVerificationLogs] = useState<VerificationLog[]>(
+    []
+  );
   const [showLogs, setShowLogs] = useState(false);
 
-  // ==================== Environment State ====================
+  // ==================== Environment / Wi-Fi State ====================
   const [environmentStored, setEnvironmentStored] = useState(false);
   const [environmentVerified, setEnvironmentVerified] = useState(false);
+  // ✅ NEW: Wi-Fi fingerprinting state
+  const [wifiScore, setWifiScore] = useState<number | null>(null);
+  const [wifiAnomaly, setWifiAnomaly] = useState<boolean>(false);
+  const [wifiCheckEnabled, setWifiCheckEnabled] = useState<boolean>(false);
+
+  // ==================== Tracking Timeline State ====================
+  const [continuityChecks, setContinuityChecks] = useState<ContinuityCheck[]>(
+    []
+  );
+  const [entryTime, setEntryTime] = useState<string | null>(null);
+  const [nextCheckIn, setNextCheckIn] = useState(60);
 
   // ==================== Refs ====================
   const sessionIdRef = useRef<string | null>(null);
@@ -126,8 +166,11 @@ const DashboardScreen = () => {
   const counterRef = useRef<number>(0);
   const isChainGeneratedRef = useRef<boolean>(false);
   const isCheckingIn = useRef<boolean>(false);
-  const autoCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  const autoCheckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoCheckStartedRef = useRef<boolean>(false);
+  const countdownStartedRef = useRef<boolean>(false);
+  const wifiCheckEnabledRef = useRef<boolean>(false); // ✅ NEW
 
   // Update refs when state changes
   useEffect(() => {
@@ -146,13 +189,33 @@ const DashboardScreen = () => {
     isChainGeneratedRef.current = isChainGenerated;
   }, [isChainGenerated]);
 
+  // ✅ NEW: keep ref in sync with state
+  useEffect(() => {
+    wifiCheckEnabledRef.current = wifiCheckEnabled;
+  }, [wifiCheckEnabled]);
+
+  // ==================== Fetch Continuity Checks ====================
+  const fetchContinuityChecks = async (sid: string) => {
+    try {
+      const response = await studentAPI.getContinuityChecks(sid);
+      setContinuityChecks(response.data.checks || []);
+      setEntryTime(response.data.entry_time || null);
+      console.log(
+        `📊 Fetched ${response.data.checks?.length || 0} continuity checks`
+      );
+    } catch (error) {
+      console.error('Failed to fetch checks:', error);
+      setContinuityChecks([]);
+    }
+  };
+
   // ==================== Load Stored Chain on App Start ====================
   useEffect(() => {
     const restoreChain = async () => {
       try {
         const keys = await AsyncStorage.getAllKeys();
-        const chainKeys = keys.filter(k => k.startsWith('chain_'));
-        
+        const chainKeys = keys.filter((k) => k.startsWith('chain_'));
+
         for (const key of chainKeys) {
           const stored = await AsyncStorage.getItem(key);
           if (stored) {
@@ -164,7 +227,9 @@ const DashboardScreen = () => {
                 setSeed(data.seed);
                 setCounter(data.counter || 0);
                 setIsChainGenerated(true);
-                console.log(`✅ Restored chain for session ${data.sessionId}, counter ${data.counter}`);
+                console.log(
+                  `✅ Restored chain for session ${data.sessionId}, counter ${data.counter}`
+                );
                 break;
               } else {
                 await clearChainData(data.sessionId);
@@ -176,9 +241,16 @@ const DashboardScreen = () => {
         console.error('❌ Failed to restore chain:', error);
       }
     };
-    
+
     restoreChain();
   }, [studentId]);
+
+  // ✅ Fetch checks when session changes
+  useEffect(() => {
+    if (sessionId) {
+      fetchContinuityChecks(sessionId);
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     loadDashboard();
@@ -198,11 +270,14 @@ const DashboardScreen = () => {
     try {
       const response = await studentAPI.getActiveSession(studentId);
       if (response.data.active) {
-        setSession(response.data.session);
-        if (!sessionId) {
-          setSessionId(response.data.session.session_id);
+        const newSession = response.data.session;
+        if (!session || session.session_id !== newSession.session_id) {
+          setSession(newSession);
         }
-        console.log(`✅ Active session loaded: ${response.data.session.session_id}`);
+        if (!sessionId) {
+          setSessionId(newSession.session_id);
+        }
+        console.log(`✅ Active session loaded: ${newSession.session_id}`);
       } else {
         if (!isCheckingIn.current && !isChainGeneratedRef.current) {
           setSession(null);
@@ -214,6 +289,22 @@ const DashboardScreen = () => {
           setVerificationLogs([]);
           setEnvironmentStored(false);
           setEnvironmentVerified(false);
+          // ✅ Reset Wi-Fi state
+          setWifiScore(null);
+          setWifiAnomaly(false);
+          setWifiCheckEnabled(false);
+          setContinuityChecks([]);
+          setEntryTime(null);
+          autoCheckStartedRef.current = false;
+          countdownStartedRef.current = false;
+          if (autoCheckTimerRef.current) {
+            clearInterval(autoCheckTimerRef.current);
+            autoCheckTimerRef.current = null;
+          }
+          if (countdownTimerRef.current) {
+            clearInterval(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
           console.log('🔴 No active session');
         }
       }
@@ -226,6 +317,9 @@ const DashboardScreen = () => {
     setRefreshing(true);
     await loadDashboard();
     await loadActiveSession();
+    if (sessionId) {
+      await fetchContinuityChecks(sessionId);
+    }
     setRefreshing(false);
   };
 
@@ -235,22 +329,26 @@ const DashboardScreen = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // ==================== Auto Continuity Check (Every 1 Minute) ====================
+  // ==================== Auto Continuity Check ====================
   useEffect(() => {
-    // Clear any existing timer
-    if (autoCheckTimerRef.current) {
-      clearInterval(autoCheckTimerRef.current);
-      autoCheckTimerRef.current = null;
-    }
+    if (autoCheckStartedRef.current) return;
 
-    // Start auto-check if session is active and chain is generated
     if (session && isChainGenerated && seed) {
       console.log('⏰ Starting auto-continuity checks (every 60 seconds)');
-      
+
+      if (autoCheckTimerRef.current) {
+        clearInterval(autoCheckTimerRef.current);
+        autoCheckTimerRef.current = null;
+      }
+
       autoCheckTimerRef.current = setInterval(() => {
-        console.log('⏰ Auto-check triggered');
+        console.log('⏰ Auto-check triggered at', new Date().toLocaleTimeString());
         sendContinuityCheck();
-      }, 60000); // 60 seconds for testing
+        // ✅ NEW: also run a Wi-Fi check alongside continuity
+        sendWifiCheck();
+      }, 60000);
+
+      autoCheckStartedRef.current = true;
     }
 
     return () => {
@@ -261,12 +359,47 @@ const DashboardScreen = () => {
     };
   }, [session, isChainGenerated, seed]);
 
-  // ==================== App State Listener (Resume from Background) ====================
+  // ==================== Countdown Timer ====================
+  useEffect(() => {
+    if (countdownStartedRef.current) return;
+
+    if (session && isChainGenerated) {
+      console.log('⏰ Starting countdown timer');
+
+      if (countdownTimerRef.current) {
+        clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+
+      setNextCheckIn(60);
+      countdownTimerRef.current = setInterval(() => {
+        setNextCheckIn((prev) => {
+          if (prev <= 1) {
+            sendContinuityCheck();
+            // ✅ NEW: also run a Wi-Fi check
+            sendWifiCheck();
+            return 60;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      countdownStartedRef.current = true;
+    }
+
+    return () => {
+      if (countdownTimerRef.current) {
+        clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+    };
+  }, [session, isChainGenerated]);
+
+  // ==================== App State Listener ====================
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
         console.log('📱 App resumed from background');
-        // Send continuity check when app resumes
         if (session && isChainGenerated && seed) {
           console.log('⏰ App resumed — checking continuity...');
           setTimeout(() => sendContinuityCheck(), 2000);
@@ -279,16 +412,20 @@ const DashboardScreen = () => {
 
   const isWithinInternshipHours = () => {
     if (!internship) return false;
-    
+
     const now = new Date();
     const currentTime = now.getHours() * 60 + now.getMinutes();
-    
-    const [startHour, startMin] = (internship.daily_start || '09:00').split(':').map(Number);
-    const [endHour, endMin] = (internship.daily_end || '17:00').split(':').map(Number);
-    
+
+    const [startHour, startMin] = (internship.daily_start || '09:00')
+      .split(':')
+      .map(Number);
+    const [endHour, endMin] = (internship.daily_end || '17:00')
+      .split(':')
+      .map(Number);
+
     const startMinutes = startHour * 60 + startMin;
     const endMinutes = endHour * 60 + endMin;
-    
+
     return currentTime >= startMinutes && currentTime <= endMinutes;
   };
 
@@ -296,114 +433,155 @@ const DashboardScreen = () => {
     if (sessionId) {
       clearChainData(sessionId);
     }
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Logout', 
-          style: 'destructive',
-          onPress: () => navigation.replace('Login')
-        }
-      ]
-    );
+    Alert.alert('Logout', 'Are you sure you want to logout?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Logout',
+        style: 'destructive',
+        onPress: () => navigation.replace('Login'),
+      },
+    ]);
   };
 
   // ==================== Continuity Check ====================
-const sendContinuityCheck = async () => {
-  const sid = sessionIdRef.current;
-  const seedVal = seedRef.current;
-  const currentCounter = counterRef.current;
+  const sendContinuityCheck = async () => {
+    const sid = sessionIdRef.current;
+    const seedVal = seedRef.current;
+    const currentCounter = counterRef.current;
 
-  console.log('🔍 Continuity check called. Status:', {
-    sessionId: sid,
-    seed: seedVal ? seedVal.substring(0, 16) + '...' : null,
-    counter: currentCounter,
-    isChainGenerated: isChainGeneratedRef.current
-  });
-
-  if (!sid || !seedVal) {
-    console.log('⚠️ No session ID or seed');
-    return;
-  }
-
-  if (!isChainGeneratedRef.current) {
-    console.log('⚠️ Chain not generated');
-    return;
-  }
-
-  // ✅ Get next hash
-  const nextCounter = currentCounter + 1;
-  const hash = await getCounterHash(seedVal, nextCounter);
-  console.log(`📡 Sending continuity check #${nextCounter}`);
-  console.log(`📡 Hash: ${hash.substring(0, 16)}...`);
-
-  setContinuityStatus('pending');
-  setStatusMessage(`🔄 Verifying continuity #${nextCounter}...`);
-  
-  try {
-    const response = await studentAPI.verifyContinuity(sid, hash);
-    console.log(`📡 Response: ${response.data.verified ? '✅ Verified' : '❌ Failed'}`);
-    console.log(`📡 Message: ${response.data.message}`);
-    
-    const logEntry: VerificationLog = {
-      time: new Date().toLocaleTimeString(),
-      counter: nextCounter,
-      status: response.data.verified ? 'success' : 'failed',
-      message: response.data.verified 
-        ? `✅ Check #${nextCounter} verified (counter: ${response.data.current_index})` 
-        : `❌ Check #${nextCounter} failed: ${response.data.message}`,
-    };
-    
-    setVerificationLogs(prev => [...prev, logEntry]);
-    
-    if (response.data.verified) {
-      // ✅ Update state
-      setCounter(nextCounter);
-      counterRef.current = nextCounter;
-      
-      // ✅ Save to storage
-      await saveChainData({
-        sessionId: sid,
-        seed: seedVal,
-        counter: nextCounter,
-        studentId: studentId,
-      });
-      
-      setContinuityStatus('verified');
-      setStatusMessage(`✅ Continuity #${nextCounter} verified!`);
-      console.log(`✅ Continuity check #${nextCounter} passed`);
-    } else {
-      setContinuityStatus('failed');
-      setStatusMessage(`❌ Continuity #${nextCounter} failed!`);
-      console.log(`❌ Continuity check failed: ${response.data.message}`);
+    if (!sid || !seedVal) {
+      console.log('⚠️ No session ID or seed');
+      return;
     }
-  } catch (error) {
-    console.error('❌ Continuity check error:', error);
-    setContinuityStatus('failed');
-    setStatusMessage('❌ Continuity check error!');
-    
-    setVerificationLogs(prev => [...prev, {
-      time: new Date().toLocaleTimeString(),
-      counter: nextCounter,
-      status: 'failed',
-      message: '❌ Network error',
-    }]);
-  }
-};
+
+    if (!isChainGeneratedRef.current) {
+      console.log('⚠️ Chain not generated');
+      return;
+    }
+
+    const nextCounter = currentCounter + 1;
+    const hash = await getCounterHash(seedVal, nextCounter);
+    console.log(`📡 Sending continuity check #${nextCounter}`);
+
+    setContinuityStatus('pending');
+    setStatusMessage(`🔄 Verifying continuity #${nextCounter}...`);
+
+    try {
+      const response = await studentAPI.verifyContinuity(sid, hash);
+      console.log(
+        `📡 Response: ${response.data.verified ? '✅ Verified' : '❌ Failed'}`
+      );
+
+      const logEntry: VerificationLog = {
+        time: new Date().toLocaleTimeString(),
+        counter: nextCounter,
+        status: response.data.verified ? 'success' : 'failed',
+        message: response.data.verified
+          ? `✅ Check #${nextCounter} verified (counter: ${response.data.current_index})`
+          : `❌ Check #${nextCounter} failed: ${response.data.message}`,
+      };
+
+      setVerificationLogs((prev) => [...prev, logEntry]);
+
+      if (response.data.verified) {
+        setCounter(nextCounter);
+        counterRef.current = nextCounter;
+        await saveChainData({
+          sessionId: sid,
+          seed: seedVal,
+          counter: nextCounter,
+          studentId: studentId,
+        });
+        setContinuityStatus('verified');
+        setStatusMessage(`✅ Continuity #${nextCounter} verified!`);
+        await fetchContinuityChecks(sid);
+      } else {
+        setContinuityStatus('failed');
+        setStatusMessage(`❌ Continuity #${nextCounter} failed!`);
+      }
+    } catch (error) {
+      console.error('❌ Continuity check error:', error);
+      setContinuityStatus('failed');
+      setStatusMessage('❌ Continuity check error!');
+
+      setVerificationLogs((prev) => [
+        ...prev,
+        {
+          time: new Date().toLocaleTimeString(),
+          counter: nextCounter,
+          status: 'failed',
+          message: '❌ Network error',
+        },
+      ]);
+    }
+  };
+
+  // ============================================================
+  // ✅ NEW: Wi-Fi Verification
+  // ============================================================
+  const sendWifiCheck = async () => {
+    const sid = sessionIdRef.current;
+
+    if (!sid) {
+      console.log('⚠️ No session ID for Wi-Fi check');
+      return;
+    }
+
+    if (!wifiCheckEnabledRef.current) {
+      console.log('⚠️ Wi-Fi checks disabled');
+      return;
+    }
+
+    try {
+      console.log('📶 Running Wi-Fi verification...');
+      const envData = await captureEnvironment();
+
+      if (envData.aps.length === 0) {
+        console.log('⚠️ No APs seen — skipping Wi-Fi check');
+        return;
+      }
+
+      const aps = toAPList(envData.aps);
+      const response = await studentAPI.verifyWifi(sid, aps);
+
+      const { verified, similarity_score, is_anomaly, message, anomaly_id } =
+        response.data;
+
+      setWifiScore(similarity_score);
+      setWifiAnomaly(is_anomaly);
+
+      setVerificationLogs((prev) => [
+        ...prev,
+        {
+          time: new Date().toLocaleTimeString(),
+          counter: -2, // -2 = Wi-Fi log
+          status: verified ? 'success' : 'failed',
+          message: verified
+            ? `📶 Wi-Fi verified (score ${similarity_score.toFixed(2)})`
+            : `📶 Wi-Fi anomaly (score ${similarity_score.toFixed(
+                2
+              )})${anomaly_id ? ` — flagged #${anomaly_id}` : ''}`,
+        },
+      ]);
+
+      if (is_anomaly) {
+        console.warn(`🚨 Wi-Fi anomaly detected: ${message}`);
+      }
+    } catch (error) {
+      console.error('❌ Wi-Fi check failed:', error);
+    }
+  };
 
   // ==================== Verify First Hash (h1) ====================
   const verifyFirstHash = async (sid: string, seedVal: string) => {
     console.log(`🔐 Verifying first hash (counter: 1)...`);
     setStatusMessage('🔐 Verifying first hash...');
-    
+
     const hash = await getCounterHash(seedVal, 1);
-    console.log(`📡 Sending first hash: ${hash.substring(0, 16)}...`);
-    
+
     try {
       const response = await studentAPI.verifyContinuity(sid, hash);
-      
+
       if (response.data.verified) {
         console.log('✅ First hash verified successfully!');
         setCounter(1);
@@ -414,28 +592,33 @@ const sendContinuityCheck = async () => {
           counter: 1,
           studentId: studentId,
         });
-        setVerificationLogs(prev => [...prev, {
-          time: new Date().toLocaleTimeString(),
-          counter: 1,
-          status: 'success',
-          message: '✅ First hash verified - Chain confirmed!',
-        }]);
+        setVerificationLogs((prev) => [
+          ...prev,
+          {
+            time: new Date().toLocaleTimeString(),
+            counter: 1,
+            status: 'success',
+            message: '✅ First hash verified - Chain confirmed!',
+          },
+        ]);
         setStatusMessage('✅ First hash verified!');
+        await fetchContinuityChecks(sid);
         return true;
       } else {
-        console.log('❌ First hash verification failed:', response.data.message);
-        setVerificationLogs(prev => [...prev, {
-          time: new Date().toLocaleTimeString(),
-          counter: 1,
-          status: 'failed',
-          message: '❌ First hash verification failed!',
-        }]);
-        setStatusMessage('❌ First hash verification failed!');
+        console.log('❌ First hash verification failed');
+        setVerificationLogs((prev) => [
+          ...prev,
+          {
+            time: new Date().toLocaleTimeString(),
+            counter: 1,
+            status: 'failed',
+            message: '❌ First hash verification failed!',
+          },
+        ]);
         return false;
       }
     } catch (error) {
       console.error('❌ First hash verification error:', error);
-      setStatusMessage('❌ First hash verification error!');
       return false;
     }
   };
@@ -452,7 +635,10 @@ const sendContinuityCheck = async () => {
     }
 
     if (!isWithinInternshipHours()) {
-      Alert.alert('Outside Working Hours', `Internship hours are ${internship.daily_start} - ${internship.daily_end}.`);
+      Alert.alert(
+        'Outside Working Hours',
+        `Internship hours are ${internship.daily_start} - ${internship.daily_end}.`
+      );
       return;
     }
 
@@ -476,7 +662,9 @@ const sendContinuityCheck = async () => {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      console.log(`📍 Location: ${location.coords.latitude}, ${location.coords.longitude}`);
+      console.log(
+        `📍 Location: ${location.coords.latitude}, ${location.coords.longitude}`
+      );
 
       setStatusMessage('🔍 Verifying location with ZKP...');
       setCheckInStatus('verifying_location');
@@ -488,7 +676,9 @@ const sendContinuityCheck = async () => {
       );
 
       const data = response.data;
-      console.log(`📍 Start entry response: ${data.verified ? '✅ Verified' : '❌ Failed'}`);
+      console.log(
+        `📍 Start entry response: ${data.verified ? '✅ Verified' : '❌ Failed'}`
+      );
 
       if (!data.verified) {
         setCheckInStatus('error');
@@ -514,14 +704,11 @@ const sendContinuityCheck = async () => {
             data.qr_data.company_id,
             data.qr_data.token
           );
-          
-          console.log('📦 Full entry response:', JSON.stringify(entryResponse.data, null, 2));
-          
+
           const newSessionId = entryResponse.data.session_id;
           const newSeed = entryResponse.data.seed;
-          
+
           if (!newSeed) {
-            console.log('⚠️ No seed from backend');
             throw new Error('No seed received from backend');
           }
 
@@ -532,15 +719,15 @@ const sendContinuityCheck = async () => {
           setIsChainGenerated(true);
           isChainGeneratedRef.current = true;
           setContinuityStatus('idle');
-          setVerificationLogs([{
-            time: new Date().toLocaleTimeString(),
-            counter: 0,
-            status: 'info',
-            message: '✅ Session started',
-          }]);
-          console.log(`✅ Seed received: ${newSeed.substring(0, 16)}...`);
+          setVerificationLogs([
+            {
+              time: new Date().toLocaleTimeString(),
+              counter: 0,
+              status: 'info',
+              message: '✅ Session started',
+            },
+          ]);
 
-          // ✅ Save to storage
           await saveChainData({
             sessionId: newSessionId,
             seed: newSeed,
@@ -548,56 +735,139 @@ const sendContinuityCheck = async () => {
             studentId: studentId,
           });
 
-          // ✅ Verify first hash (counter: 1)
           const firstVerified = await verifyFirstHash(newSessionId, newSeed);
           if (!firstVerified) {
             console.log('⚠️ First hash verification failed — continuing anyway');
           }
 
-          // In handleCheckIn, after entry:
-try {
-  console.log('📶 Capturing environment...');
-  const envData = await captureEnvironment();
-  const salt = await generateSalt();
-  const commitment = await generateCommitment(envData.bssids, salt);
-  
-  await studentAPI.storeEnvironment(newSessionId, commitment);
-  setEnvironmentStored(true);
-  console.log(`✅ Environment stored (${envData.bssids.length} features)`);
-  setVerificationLogs(prev => [...prev, {
-    time: new Date().toLocaleTimeString(),
-    counter: 0,
-    status: 'info',
-    message: `📶 Environment: ${envData.bssids.length} features captured`,
-  }]);
-} catch (error) {
-  console.warn('⚠️ Environment capture failed (continuing anyway):', error);
-  // ✅ Don't block — just continue
-  setVerificationLogs(prev => [...prev, {
-    time: new Date().toLocaleTimeString(),
-    counter: 0,
-    status: 'info',
-    message: '📶 Environment capture skipped (will verify on exit)',
-  }]);
-}
+          // ============================================================
+          // ✅ Wi-Fi Fingerprint Enrollment (replaces old environment)
+          // ============================================================
+          try {
+            console.log('📶 Starting Wi-Fi fingerprint enrollment...');
+
+            const hasPermission = await ensureEnvironmentPermissions();
+            if (!hasPermission) {
+              console.warn('⚠️ Wi-Fi permissions not granted');
+              setVerificationLogs((prev) => [
+                ...prev,
+                {
+                  time: new Date().toLocaleTimeString(),
+                  counter: 0,
+                  status: 'info',
+                  message: '📶 Wi-Fi permission denied — Wi-Fi checks disabled',
+                },
+              ]);
+              setWifiCheckEnabled(false);
+            } else {
+              const envData = await captureTemplate(
+                WIFI_CONFIG.ENROLL_SCAN_ROUNDS,
+                WIFI_CONFIG.ENROLL_SCAN_INTERVAL_MS
+              );
+
+              if (envData.is_usable) {
+                const aps = toAPList(envData.aps);
+                
+                console.log('📶 [DEBUG] About to enroll. APs count:', aps.length);
+                console.log('📶 [DEBUG] First AP:', JSON.stringify(aps[0]));
+                console.log('📶 [DEBUG] Session ID:', newSessionId);
+                console.log('📶 [DEBUG] API_URL:', require('../api/client').API_URL);
+
+                let wifiResponse;
+                try {
+                  const payload = { session_id: newSessionId, scans: [aps] };
+                  const serialized = JSON.stringify(payload);
+                  console.log('📶 [DEBUG] Payload size:', serialized.length, 'bytes');
+                  console.log('📶 [DEBUG] Payload preview:', serialized.substring(0, 300));
+
+                  wifiResponse = await studentAPI.enrollWifi(
+                    newSessionId,
+                    [aps]
+                  );
+                } catch (err: any) {
+                  console.error('❌ [DEBUG] Enroll failed:', err);
+                  console.error('❌ [DEBUG] Error name:', err.name);
+                  console.error('❌ [DEBUG] Error message:', err.message);
+                  console.error('❌ [DEBUG] Error config URL:', err.config?.url);
+                  console.error('❌ [DEBUG] Error config baseURL:', err.config?.baseURL);
+                  console.error('❌ [DEBUG] Error config method:', err.config?.method);
+                  console.error('❌ [DEBUG] Error request exists:', !!err.request);
+                  throw err;
+                }
+
+
+                if (wifiResponse.data.success) {
+                  setEnvironmentStored(true);
+                  setWifiCheckEnabled(true);
+                  console.log(
+                    `✅ Wi-Fi template enrolled: ${wifiResponse.data.ap_count} APs, threshold=${wifiResponse.data.threshold}`
+                  );
+                  setVerificationLogs((prev) => [
+                    ...prev,
+                    {
+                      time: new Date().toLocaleTimeString(),
+                      counter: 0,
+                      status: 'success',
+                      message: `📶 Wi-Fi template: ${wifiResponse.data.ap_count} APs enrolled`,
+                    },
+                  ]);
+                } else {
+                  setWifiCheckEnabled(false);
+                  setVerificationLogs((prev) => [
+                    ...prev,
+                    {
+                      time: new Date().toLocaleTimeString(),
+                      counter: 0,
+                      status: 'info',
+                      message: `📶 Wi-Fi enrollment skipped: ${wifiResponse.data.message}`,
+                    },
+                  ]);
+                }
+              } else {
+                console.warn(
+                  `⚠️ Not enough APs (${envData.aps.length}). Need at least ${WIFI_CONFIG.MIN_APS_FOR_TEMPLATE}.`
+                );
+                setWifiCheckEnabled(false);
+                setVerificationLogs((prev) => [
+                  ...prev,
+                  {
+                    time: new Date().toLocaleTimeString(),
+                    counter: 0,
+                    status: 'info',
+                    message: `📶 Only ${envData.aps.length} APs — Wi-Fi checks disabled`,
+                  },
+                ]);
+              }
+            }
+          } catch (error) {
+            console.warn('⚠️ Wi-Fi enrollment failed (continuing anyway):', error);
+            setWifiCheckEnabled(false);
+            setVerificationLogs((prev) => [
+              ...prev,
+              {
+                time: new Date().toLocaleTimeString(),
+                counter: 0,
+                status: 'info',
+                message: '📶 Wi-Fi enrollment error — checks disabled',
+              },
+            ]);
+          }
+
+          await fetchContinuityChecks(newSessionId);
 
           setCheckInStatus('entry_complete');
           setStatusMessage('✅ Check-in successful!');
           setShowQRModal(false);
-          
-          Alert.alert('✅ Check In Successful', 'Entry verified with ZKP! Hash chain started.');
-          
-          // ✅ Show chain status
-          setTimeout(() => {
-            const statusMsg = `🔗 Chain: ${counterRef.current}/${100} verified`;
-            setStatusMessage(statusMsg);
-          }, 1000);
+
+          Alert.alert(
+            '✅ Check In Successful',
+            'Entry verified with ZKP! Hash chain + Wi-Fi started.'
+          );
 
           setTimeout(async () => {
             await loadActiveSession();
             isCheckingIn.current = false;
           }, 10000);
-
         } catch (error: any) {
           console.error('❌ Entry error:', error);
           setCheckInStatus('error');
@@ -606,7 +876,6 @@ try {
           isCheckingIn.current = false;
         }
       }, 3000);
-
     } catch (error: any) {
       console.error('❌ Check-in error:', error);
       setCheckInStatus('error');
@@ -633,7 +902,7 @@ try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       let latitude = 0;
       let longitude = 0;
-      
+
       if (status === 'granted') {
         setStatusMessage('📍 Getting your location...');
         const location = await Location.getCurrentPositionAsync({
@@ -641,13 +910,11 @@ try {
         });
         latitude = location.coords.latitude;
         longitude = location.coords.longitude;
-        console.log(`📍 Exit location: ${latitude}, ${longitude}`);
       }
 
       setStatusMessage('🔍 Verifying location for exit...');
       const response = await studentAPI.startExit(studentId, latitude, longitude);
       const data = response.data;
-      console.log(`📍 Exit response: ${data.verified ? '✅ Verified' : '⚠️ Warning'}`);
 
       if (!data.verified && data.qr_data === null) {
         setCheckInStatus('error');
@@ -669,39 +936,41 @@ try {
         try {
           const seedVal = seedRef.current;
           let finalHash = null;
-          
+
           if (seedVal) {
             finalHash = await getExitHash(seedVal);
-            console.log(`📤 Sending exit hash: ${finalHash.substring(0, 16)}...`);
           }
 
-          // ✅ Verify environment before exit
+          // ✅ Optional: run a final Wi-Fi check at exit
           let envMatch = false;
-          // In handleCheckOut, after QR scan:
-try {
-  console.log('📶 Verifying environment on exit...');
-  const envData = await captureEnvironment();
-  const salt = await generateSalt();
-  const currentCommitment = await generateCommitment(envData.bssids, salt);
-  
-  const envResponse = await studentAPI.verifyEnvironment(sessionId!, currentCommitment);
-  console.log(`📶 Environment exit: ${envResponse.data.verified ? '✅ Pass' : '⚠️ Check failed'}`);
-  
-  setVerificationLogs(prev => [...prev, {
-    time: new Date().toLocaleTimeString(),
-    counter: -1,
-    status: envResponse.data.verified ? 'success' : 'info',
-    message: `📶 Exit location: ${envResponse.data.verified ? '✅ Verified' : '⚠️ Not verified (allowed)'}`,
-  }]);
-} catch (error) {
-  console.warn('⚠️ Environment verification failed (continuing anyway):', error);
-  setVerificationLogs(prev => [...prev, {
-    time: new Date().toLocaleTimeString(),
-    counter: -1,
-    status: 'info',
-    message: '📶 Environment check skipped on exit',
-  }]);
-}
+          try {
+            if (wifiCheckEnabledRef.current) {
+              console.log('📶 Running final Wi-Fi check on exit...');
+              const envData = await captureEnvironment();
+              if (envData.aps.length > 0) {
+                const aps = toAPList(envData.aps);
+                const wifiExitResp = await studentAPI.verifyWifi(
+                  sessionId!,
+                  aps
+                );
+                envMatch = wifiExitResp.data.verified;
+                setWifiScore(wifiExitResp.data.similarity_score);
+                setWifiAnomaly(wifiExitResp.data.is_anomaly);
+                setVerificationLogs((prev) => [
+                  ...prev,
+                  {
+                    time: new Date().toLocaleTimeString(),
+                    counter: -2,
+                    status: envMatch ? 'success' : 'info',
+                    message: `📶 Exit Wi-Fi: ${envMatch ? '✅ Verified' : '⚠️ Not verified (allowed)'}`,
+                  },
+                ]);
+              }
+            }
+          } catch (error) {
+            console.warn('⚠️ Exit Wi-Fi check failed (continuing):', error);
+          }
+
           const exitResponse = await studentAPI.completeExit(
             studentId,
             data.qr_data.company_id,
@@ -709,68 +978,57 @@ try {
             finalHash || undefined
           );
 
-          console.log(`✅ Exit response: chain_verified=${exitResponse.data.chain_verified}`);
-
           setCheckInStatus('entry_complete');
           setStatusMessage('✅ Check-out successful!');
           setShowQRModal(false);
-          
+
           if (exitResponse.data.chain_verified && envMatch) {
-            setVerificationLogs(prev => [...prev, {
-              time: new Date().toLocaleTimeString(),
-              counter: -1,
-              status: 'success',
-              message: '✅ Session completed successfully (Hash + Environment)',
-            }]);
             Alert.alert(
               '✅ Check Out Successful',
-              `Duration: ${exitResponse.data.duration_minutes} minutes\n✅ Hash chain verified!\n✅ Environment verified!`
+              `Duration: ${exitResponse.data.duration_minutes} minutes\n✅ Hash chain verified!\n✅ Wi-Fi verified!`
             );
           } else if (exitResponse.data.chain_verified) {
-            setVerificationLogs(prev => [...prev, {
-              time: new Date().toLocaleTimeString(),
-              counter: -1,
-              status: 'success',
-              message: '✅ Session completed (Hash verified, Environment skipped)',
-            }]);
             Alert.alert(
               '✅ Check Out Successful',
-              `Duration: ${exitResponse.data.duration_minutes} minutes\n✅ Hash chain verified!\n⚠️ Environment: ${envMatch ? '✅ Verified' : 'Skipped'}`
+              `Duration: ${exitResponse.data.duration_minutes} minutes\n✅ Hash chain verified!`
             );
           } else {
-            setVerificationLogs(prev => [...prev, {
-              time: new Date().toLocaleTimeString(),
-              counter: -1,
-              status: 'failed',
-              message: '⚠️ Session completed with anomaly',
-            }]);
             Alert.alert(
               '⚠️ Check Out Completed',
-              `Duration: ${exitResponse.data.duration_minutes} minutes\n⚠️ Hash chain could not be verified.`,
-              [{ text: 'OK' }]
+              `Duration: ${exitResponse.data.duration_minutes} minutes\n⚠️ Hash chain could not be verified.`
             );
           }
-          
+
           if (sessionId) {
             await clearChainData(sessionId);
           }
-          
+
           setSeed(null);
           setCounter(0);
           setIsChainGenerated(false);
           setContinuityStatus('idle');
           setEnvironmentStored(false);
           setEnvironmentVerified(false);
-          
+          // ✅ Reset Wi-Fi state
+          setWifiScore(null);
+          setWifiAnomaly(false);
+          setWifiCheckEnabled(false);
+          setContinuityChecks([]);
+          setEntryTime(null);
+
           await refreshAll();
         } catch (error: any) {
           console.error('❌ Exit error:', error);
           setCheckInStatus('error');
-          setStatusMessage(`❌ ${error.response?.data?.detail || 'Failed to complete exit'}`);
-          Alert.alert('Check-out Failed', error.response?.data?.detail || 'Failed to complete exit');
+          setStatusMessage(
+            `❌ ${error.response?.data?.detail || 'Failed to complete exit'}`
+          );
+          Alert.alert(
+            'Check-out Failed',
+            error.response?.data?.detail || 'Failed to complete exit'
+          );
         }
       }, 3000);
-
     } catch (error: any) {
       console.error('❌ Check-out error:', error);
       setCheckInStatus('error');
@@ -791,6 +1049,8 @@ try {
       return;
     }
     sendContinuityCheck();
+    // ✅ NEW: also fire a Wi-Fi check
+    sendWifiCheck();
   };
 
   const getStatusText = () => {
@@ -822,7 +1082,9 @@ try {
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAll} />}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={refreshAll} />
+      }
     >
       <View style={styles.header}>
         <View style={styles.headerRow}>
@@ -831,18 +1093,16 @@ try {
             <Text style={styles.logoutButtonText}>Logout</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.headerSubtitle}>
-          {studentName || studentId}
-        </Text>
-        
+        <Text style={styles.headerSubtitle}>{studentName || studentId}</Text>
+
         {session && (
           <View style={styles.continuityRow}>
-            <View style={[styles.continuityDot, { backgroundColor: getContinuityColor() }]} />
-            <Text style={styles.continuityText}>
-              {getContinuityDisplay()}
-            </Text>
-            <TouchableOpacity 
-              onPress={() => setShowLogs(!showLogs)} 
+            <View
+              style={[styles.continuityDot, { backgroundColor: getContinuityColor() }]}
+            />
+            <Text style={styles.continuityText}>{getContinuityDisplay()}</Text>
+            <TouchableOpacity
+              onPress={() => setShowLogs(!showLogs)}
               style={styles.logsToggle}
             >
               <Text style={styles.logsToggleText}>
@@ -851,14 +1111,22 @@ try {
             </TouchableOpacity>
           </View>
         )}
+
+        {/* ✅ Wi-Fi status line */}
         {session && environmentStored && (
           <Text style={styles.envStatus}>
-            📶 WiFi: {environmentVerified ? '✅ Verified' : '📡 Captured'}
+            📶 Wi-Fi:{' '}
+            {wifiAnomaly
+              ? `🚨 Anomaly (score ${wifiScore?.toFixed(2) ?? '?'})`
+              : wifiScore !== null
+              ? `✅ Verified (${wifiScore.toFixed(2)})`
+              : '📡 Captured'}
           </Text>
         )}
+
         {session && isChainGenerated && (
           <Text style={styles.autoStatus}>
-            ⏰ Auto-check: Every 60s | Counter: {counter}/100
+            ⏰ Next check in: {nextCheckIn}s | Counter: {counter}/100
           </Text>
         )}
       </View>
@@ -870,12 +1138,16 @@ try {
             <View key={index} style={styles.logItem}>
               <Text style={styles.logTime}>{log.time}</Text>
               <Text style={styles.logCounter}>#{log.counter}</Text>
-              <Text style={[
-                styles.logStatus,
-                log.status === 'success' ? styles.logSuccess : 
-                log.status === 'info' ? styles.logInfo :
-                styles.logFailed
-              ]}>
+              <Text
+                style={[
+                  styles.logStatus,
+                  log.status === 'success'
+                    ? styles.logSuccess
+                    : log.status === 'info'
+                    ? styles.logInfo
+                    : styles.logFailed,
+                ]}
+              >
                 {log.status === 'success' ? '✅' : log.status === 'info' ? 'ℹ️' : '❌'}
               </Text>
               <Text style={styles.logMessage}>{log.message}</Text>
@@ -887,7 +1159,12 @@ try {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Today's Status</Text>
         <View style={styles.statusRow}>
-          <View style={[styles.statusDot, { backgroundColor: session ? '#16A34A' : '#4F46E5' }]} />
+          <View
+            style={[
+              styles.statusDot,
+              { backgroundColor: session ? '#16A34A' : '#4F46E5' },
+            ]}
+          />
           <Text style={styles.statusText}>{getStatusText()}</Text>
         </View>
 
@@ -895,11 +1172,13 @@ try {
           <View style={styles.statusProgress}>
             <Text style={styles.statusProgressText}>{statusMessage}</Text>
             {checkInStatus !== 'error' && checkInStatus !== 'entry_complete' && (
-              <ActivityIndicator size="small" color="#4F46E5" style={styles.statusSpinner} />
+              <ActivityIndicator
+                size="small"
+                color="#4F46E5"
+                style={styles.statusSpinner}
+              />
             )}
-            {checkInStatus === 'error' && (
-              <Text style={styles.statusError}>❌</Text>
-            )}
+            {checkInStatus === 'error' && <Text style={styles.statusError}>❌</Text>}
             {checkInStatus === 'entry_complete' && (
               <Text style={styles.statusSuccess}>✅</Text>
             )}
@@ -918,19 +1197,24 @@ try {
             </View>
             {!isWithinHours && !session && (
               <Text style={styles.warningText}>
-                ⏰ Outside working hours. Check-in available {internship.daily_start} - {internship.daily_end}
+                ⏰ Outside working hours. Check-in available {internship.daily_start} -{' '}
+                {internship.daily_end}
               </Text>
             )}
             {internship.is_paid && (
               <View style={styles.detailsRow}>
                 <Text style={styles.detailsLabel}>Stipend:</Text>
-                <Text style={styles.detailsValue}>₹{internship.stipend_amount}/month</Text>
+                <Text style={styles.detailsValue}>
+                  ₹{internship.stipend_amount}/month
+                </Text>
               </View>
             )}
             {session && (
               <View style={styles.detailsRow}>
                 <Text style={styles.detailsLabel}>Duration:</Text>
-                <Text style={styles.detailsValue}>{session.duration_minutes} minutes</Text>
+                <Text style={styles.detailsValue}>
+                  {session.duration_minutes} minutes
+                </Text>
               </View>
             )}
           </View>
@@ -943,12 +1227,21 @@ try {
         )}
       </View>
 
+      {session && (
+        <TrackingTimeline
+          checks={continuityChecks}
+          entryTime={entryTime}
+          exitTime={session?.exit_time}
+        />
+      )}
+
       <View style={styles.actions}>
         <TouchableOpacity
           style={[
             styles.button,
             styles.checkInButton,
-            (!internship?.can_start || session || !isWithinHours || loading) && styles.buttonDisabled,
+            (!internship?.can_start || session || !isWithinHours || loading) &&
+              styles.buttonDisabled,
           ]}
           onPress={handleCheckIn}
           disabled={!internship?.can_start || !!session || !isWithinHours || loading}
@@ -980,12 +1273,13 @@ try {
       </View>
 
       <Text style={styles.footer}>
-        {session && isChainGenerated 
-          ? `🔗 Counter: ${counter}/100 | Auto-check: 60s` 
-          : internship?.is_paid ? '💰 Paid Internship' : '📋 Internship Active'}
+        {session && isChainGenerated
+          ? `🔗 Counter: ${counter}/100 | Next check: ${nextCheckIn}s`
+          : internship?.is_paid
+          ? '💰 Paid Internship'
+          : '📋 Internship Active'}
       </Text>
 
-      {/* QR Modal */}
       <Modal
         visible={showQRModal}
         transparent={true}
@@ -998,9 +1292,11 @@ try {
               {qrData?.purpose === 'entry' ? '📱 Entry QR Code' : '📱 Exit QR Code'}
             </Text>
             <Text style={styles.modalSubtitle}>
-              {checkInStatus === 'qr_received' ? 'QR generated! Verifying...' : 'Processing...'}
+              {checkInStatus === 'qr_received'
+                ? 'QR generated! Verifying...'
+                : 'Processing...'}
             </Text>
-            
+
             <View style={styles.qrContainer}>
               {qrData && (
                 <QRCode
@@ -1010,7 +1306,7 @@ try {
                     company_id: qrData.company_id,
                     timestamp: qrData.timestamp,
                     expires_at: qrData.expires_at,
-                    purpose: qrData.purpose
+                    purpose: qrData.purpose,
                   })}
                   size={200}
                   color="#1a1a2e"
@@ -1023,10 +1319,14 @@ try {
               Token: {qrData?.token?.substring(0, 16)}...
             </Text>
 
-            <ActivityIndicator size="large" color="#4F46E5" style={styles.modalSpinner} />
+            <ActivityIndicator
+              size="large"
+              color="#4F46E5"
+              style={styles.modalSpinner}
+            />
             <Text style={styles.modalStatus}>{statusMessage}</Text>
-            
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={styles.modalCancelButton}
               onPress={() => {
                 setShowQRModal(false);
@@ -1044,7 +1344,12 @@ try {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f0f4ff' },
-  header: { backgroundColor: '#4F46E5', padding: 20, paddingTop: 48, paddingBottom: 24 },
+  header: {
+    backgroundColor: '#4F46E5',
+    padding: 20,
+    paddingTop: 48,
+    paddingBottom: 24,
+  },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1058,38 +1363,22 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 8,
   },
-  continuityDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
+  continuityDot: { width: 10, height: 10, borderRadius: 5 },
   continuityText: {
     color: '#c7d2fe',
     fontSize: 13,
     fontWeight: '500',
     flex: 1,
   },
-  envStatus: {
-    color: '#a5b4fc',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  autoStatus: {
-    color: '#a5b4fc',
-    fontSize: 11,
-    marginTop: 2,
-    opacity: 0.8,
-  },
+  envStatus: { color: '#a5b4fc', fontSize: 12, marginTop: 2 },
+  autoStatus: { color: '#a5b4fc', fontSize: 11, marginTop: 2, opacity: 0.8 },
   logsToggle: {
     paddingHorizontal: 12,
     paddingVertical: 4,
     backgroundColor: 'rgba(255,255,255,0.15)',
     borderRadius: 12,
   },
-  logsToggleText: {
-    color: '#c7d2fe',
-    fontSize: 11,
-  },
+  logsToggleText: { color: '#c7d2fe', fontSize: 11 },
   logsContainer: {
     backgroundColor: '#1e1b4b',
     margin: 12,
@@ -1110,47 +1399,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.05)',
   },
-  logTime: {
-    color: '#94a3b8',
-    fontSize: 9,
-    width: 60,
-  },
-  logCounter: {
-    color: '#94a3b8',
-    fontSize: 9,
-    width: 35,
-    textAlign: 'center',
-  },
-  logStatus: {
-    fontSize: 11,
-    width: 20,
-    textAlign: 'center',
-  },
-  logSuccess: {
-    color: '#16A34A',
-  },
-  logInfo: {
-    color: '#60A5FA',
-  },
-  logFailed: {
-    color: '#DC2626',
-  },
-  logMessage: {
-    color: '#e2e8f0',
-    fontSize: 10,
-    flex: 1,
-  },
+  logTime: { color: '#94a3b8', fontSize: 9, width: 60 },
+  logCounter: { color: '#94a3b8', fontSize: 9, width: 35, textAlign: 'center' },
+  logStatus: { fontSize: 11, width: 20, textAlign: 'center' },
+  logSuccess: { color: '#16A34A' },
+  logInfo: { color: '#60A5FA' },
+  logFailed: { color: '#DC2626' },
+  logMessage: { color: '#e2e8f0', fontSize: 10, flex: 1 },
   logoutButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 8,
   },
-  logoutButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  logoutButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -1163,7 +1425,13 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cardTitle: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 12 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
   statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
   statusText: { fontSize: 16, fontWeight: '600', color: '#1a1a2e' },
   statusProgress: {
@@ -1174,34 +1442,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f9fa',
     borderRadius: 8,
   },
-  statusProgressText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#333',
-  },
-  statusSpinner: {
-    marginLeft: 8,
-  },
-  statusError: {
-    fontSize: 18,
-    marginLeft: 8,
-  },
-  statusSuccess: {
-    fontSize: 18,
-    marginLeft: 8,
-  },
+  statusProgressText: { flex: 1, fontSize: 13, color: '#333' },
+  statusSpinner: { marginLeft: 8 },
+  statusError: { fontSize: 18, marginLeft: 8 },
+  statusSuccess: { fontSize: 18, marginLeft: 8 },
   internshipInfo: { marginTop: 12 },
   companyName: { fontSize: 18, fontWeight: 'bold', color: '#1a1a2e' },
   roleName: { fontSize: 14, color: '#666', marginTop: 2, marginBottom: 8 },
   detailsRow: { flexDirection: 'row', marginTop: 4 },
   detailsLabel: { fontSize: 14, color: '#666', width: 100 },
   detailsValue: { fontSize: 14, color: '#333', fontWeight: '500' },
-  warningText: {
-    fontSize: 12,
-    color: '#F59E0B',
-    marginTop: 8,
-    fontWeight: '500',
-  },
+  warningText: { fontSize: 12, color: '#F59E0B', marginTop: 8, fontWeight: '500' },
   noInternship: { color: '#999', textAlign: 'center', paddingVertical: 16 },
   actions: { paddingHorizontal: 16, gap: 12 },
   button: { borderRadius: 12, padding: 16, alignItems: 'center' },
@@ -1211,7 +1462,7 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.4 },
   buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   footer: { textAlign: 'center', color: '#666', fontSize: 11, padding: 16 },
-  
+
   modalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.7)',
@@ -1226,17 +1477,8 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     alignItems: 'center',
   },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#1a1a2e',
-    marginBottom: 4,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 16,
-  },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', color: '#1a1a2e', marginBottom: 4 },
+  modalSubtitle: { fontSize: 14, color: '#666', marginBottom: 16 },
   qrContainer: {
     padding: 16,
     backgroundColor: '#fff',
@@ -1251,14 +1493,8 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     marginBottom: 12,
   },
-  modalSpinner: {
-    marginTop: 8,
-  },
-  modalStatus: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 8,
-  },
+  modalSpinner: { marginTop: 8 },
+  modalStatus: { fontSize: 14, color: '#666', marginTop: 8 },
   modalCancelButton: {
     marginTop: 16,
     paddingHorizontal: 24,
@@ -1266,11 +1502,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
     borderRadius: 8,
   },
-  modalCancelText: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
-  },
+  modalCancelText: { fontSize: 14, color: '#666', fontWeight: '500' },
 });
 
 export default DashboardScreen;

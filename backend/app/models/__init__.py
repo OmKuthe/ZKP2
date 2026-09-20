@@ -7,6 +7,8 @@ from .continuity_check import ContinuityCheck
 from .anomaly import Anomaly
 from .internship import Internship
 from .internship_assignments import InternshipAssignment
+from .wifi_template import WiFiTemplate          
+from .wifi_verification import WiFiVerification 
 
 __all__ = [
     "Company",
@@ -16,4 +18,6 @@ __all__ = [
     "Anomaly",
     "Internship",
     "InternshipAssignment",
+    "WiFiTemplate",          
+    "WiFiVerification",      
 ]
