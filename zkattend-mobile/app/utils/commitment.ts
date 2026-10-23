@@ -94,7 +94,7 @@ export function isEnvironmentMatch(
  */
 export async function generateSalt(): Promise<string> {
   const Crypto = require('expo-crypto');
-  const bytes = await Crypto.getRandomBytesAsync(16);
+  const bytes = (await Crypto.getRandomBytesAsync(16)) as Uint8Array;
   return Array.from(bytes)
     .map((b: number) => b.toString(16).padStart(2, '0'))
     .join('');

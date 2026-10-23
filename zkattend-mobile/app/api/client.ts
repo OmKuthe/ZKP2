@@ -1,9 +1,10 @@
 // zkattend-mobile/app/api/client.ts
 import axios from 'axios';
 
-export const API_URL = 'http://192.168.1.174:8000/api';
+export const API_URL = 'http://localhost:8000/api';
 
 const api = axios.create({
+
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 30000,

@@ -1,0 +1,7 @@
+Run adb reverse tcp:8000 tcp:8000
+
+Update client.ts → http://localhost:8000/api
+
+Reload the app (r)
+
+Try login
