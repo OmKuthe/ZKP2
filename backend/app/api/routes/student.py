@@ -215,9 +215,23 @@ async def complete_entry(
     seed = hash_service.generate_seed()
     logger.info(f"🔐 Hash chain seed generated: {seed[:16]}...")
     
-    # 5. Create session with hash chain
+        # 5. Create session with hash chain
     session_id = f"session_{uuid.uuid4().hex[:12]}"
     entry_time = int(time.time())
+    
+    # ✅ Step 2: Face liveness result (optional, from client)
+    # NULL  = not attempted (permission denied, camera unavailable)
+    # TRUE  = liveness passed
+    # FALSE = 3 attempts failed; session is still created per "don't lock out" rule
+    face_verified = request.face_verified
+    face_verified_at = datetime.now() if face_verified is not None else None
+    
+    if face_verified is True:
+        logger.info(f"✅ Face liveness verified for {request.student_id}")
+    elif face_verified is False:
+        logger.warning(f"⚠️ Face liveness FAILED for {request.student_id} (session still created)")
+    else:
+        logger.info(f"ℹ️ Face liveness not attempted for {request.student_id}")
     
     new_session = Session(
         session_id=session_id,
@@ -230,6 +244,9 @@ async def complete_entry(
         hash_counter=0,
         hash_chain_length=100,
         check_interval_seconds=60,  # ✅ Default: 1 minute
+        # ✅ Step 2: Face liveness
+        face_verified=face_verified,
+        face_verified_at=face_verified_at,
         status="active"
     )
     

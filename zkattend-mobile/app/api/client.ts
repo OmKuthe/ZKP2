@@ -44,12 +44,18 @@ export const studentAPI = {
       longitude,
     }),
 
-  // Complete entry with QR
-  completeEntry: (studentId: string, companyId: number, qrToken: string) =>
+  // Complete entry with QR + face liveness result
+  completeEntry: (
+    studentId: string,
+    companyId: number,
+    qrToken: string,
+    faceVerified?: boolean | null
+  ) =>
     api.post('/student/complete-entry', {
       student_id: studentId,
       company_id: companyId,
       qr_token: qrToken,
+      face_verified: faceVerified ?? null,
     }),
 
   // Start exit with GPS
@@ -107,13 +113,9 @@ export const studentAPI = {
     api.get(`/student/session/checks/${sessionId}`),
 
   // ============================================================
-  // Wi-Fi Fingerprinting API (NEW)
+  // Wi-Fi Fingerprinting API
   // ============================================================
 
-  /**
-   * Enroll a Wi-Fi template for an active session.
-   * Send multiple scan rounds. The server aggregates them.
-   */
   enrollWifi: (
     sessionId: string,
     scans: Array<
@@ -130,9 +132,6 @@ export const studentAPI = {
       scans,
     }),
 
-  /**
-   * Verify the current Wi-Fi environment against the enrolled template.
-   */
   verifyWifi: (
     sessionId: string,
     scan: Array<{
@@ -147,15 +146,9 @@ export const studentAPI = {
       scan,
     }),
 
-  /**
-   * Get the active Wi-Fi template for a session.
-   */
   getWifiTemplate: (sessionId: string) =>
     api.get(`/wifi/template/${sessionId}`),
 
-  /**
-   * Get Wi-Fi verification history for a session.
-   */
   getWifiVerifications: (sessionId: string) =>
     api.get(`/wifi/verifications/${sessionId}`),
 };

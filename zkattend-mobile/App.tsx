@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import LoginScreen from './app/screens/LoginScreen';
 import DashboardScreen from './app/screens/DashboardScreen';
 import QRScannerScreen from './app/screens/QRScannerScreen';
+import FaceVerifyScreen from './app/screens/FaceVerifyScreen';
 import { RootStackParamList } from './app/types/navigation';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -20,6 +21,7 @@ export default function App() {
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Dashboard" component={DashboardScreen} />
           <Stack.Screen name="QRScanner" component={QRScannerScreen} />
+          <Stack.Screen name="FaceVerify" component={FaceVerifyScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </>

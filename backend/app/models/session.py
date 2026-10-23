@@ -3,6 +3,7 @@
 Session model - Stores active attendance sessions
 Includes Phase 2B: Hash Chain fields (Counter-based)
 Includes Wi-Fi Fingerprinting fields
+Includes Step 2: Face liveness fields
 """
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Text, Boolean
 from sqlalchemy.sql import func
@@ -45,13 +46,22 @@ class Session(Base):
     environment_features = Column(Text, nullable=True)
     
     # ========================================
-    # ✅ NEW: Wi-Fi Fingerprinting fields
+    # Wi-Fi Fingerprinting fields
     # ========================================
-    last_wifi_score = Column(Float, nullable=True)              # Last JSR score [0,1]
+    last_wifi_score = Column(Float, nullable=True)
     last_wifi_check = Column(DateTime(timezone=True), nullable=True)
-    wifi_fail_count = Column(Integer, default=0)                # Consecutive failures
-    wifi_verified_count = Column(Integer, default=0)            # Total successes
-    has_wifi_template = Column(Boolean, default=False)          # Was template captured?
+    wifi_fail_count = Column(Integer, default=0)
+    wifi_verified_count = Column(Integer, default=0)
+    has_wifi_template = Column(Boolean, default=False)
+    
+    # ========================================
+    # Step 2: Face liveness (login only)
+    # ========================================
+    # NULL  = never attempted (e.g. permission denied, camera unavailable)
+    # TRUE  = liveness passed
+    # FALSE = 3 attempts failed; session still allowed per "don't lock out" rule
+    face_verified = Column(Boolean, nullable=True)
+    face_verified_at = Column(DateTime(timezone=True), nullable=True)
     
     # ========================================
     # Session status
@@ -70,7 +80,6 @@ class Session(Base):
     company = relationship("Company", back_populates="sessions")
     continuity_checks = relationship("ContinuityCheck", back_populates="session")
     
-    # ✅ NEW: Wi-Fi relationships
     wifi_template = relationship(
         "WiFiTemplate",
         back_populates="session",

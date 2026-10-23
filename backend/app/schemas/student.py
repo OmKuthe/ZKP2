@@ -61,17 +61,22 @@ class StudentEntryRequest(BaseModel):
     company_id: int
     qr_token: str
     zk_proof: Optional[Dict[str, Any]] = None
-    hash_chain_link: Optional[str] = None  # ✅ For exit verification
+    hash_chain_link: Optional[str] = None  # For exit verification
+    # Step 2: Face liveness result from client.
+    # None  = not attempted (permission denied, camera unavailable)
+    # True  = liveness passed
+    # False = 3 attempts failed; session is still created per "don't lock out" rule
+    face_verified: Optional[bool] = None
 
 
 class StudentEntryResponse(BaseModel):
     session_id: str
     message: str
     entry_time: int
-    seed: Optional[str] = None  # ✅ For app to generate hashes
+    seed: Optional[str] = None  # For app to generate hashes
 
 
-# ---------- ✅ Phase 2B: Continuity Check ----------
+# ---------- Phase 2B: Continuity Check ----------
 
 class ContinuityCheckRequest(BaseModel):
     session_id: str
