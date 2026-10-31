@@ -1,21 +1,7 @@
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["nodejs_20", "snarkjs"]
 
 [phases.install]
 cmds = [
-  "pip install -r requirements.txt",
-  "npm install -g snarkjs@0.7.5"
+  "pip install -r requirements.txt"
 ]
-
-[phases.build]
-cmds = [
-  # Create a wrapper script so that `snarkjs` can be found in the runtime environment
-  "mkdir -p /app/bin",
-  "echo '#!/bin/sh' > /app/bin/snarkjs",
-  "echo 'exec npx snarkjs \"$@\"' >> /app/bin/snarkjs",
-  "chmod +x /app/bin/snarkjs"
-]
-
-[variables]
-# Ensure the runtime PATH includes the directory of the wrapper script
-PATH = "/app/bin:$PATH"
