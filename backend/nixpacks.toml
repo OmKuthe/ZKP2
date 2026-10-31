@@ -1,8 +1,7 @@
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["nodejs_20", "snarkjs"]
 
 [phases.install]
 cmds = [
-  "pip install -r requirements.txt",
-  "npm install -g snarkjs@0.7.5"
+  "pip install -r requirements.txt"
 ]
