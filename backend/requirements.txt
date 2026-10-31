@@ -10,6 +10,7 @@ alembic==1.12.1
 # Authentication
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+PyJWT>=2.8.0
 
 # QR & Crypto
 pyotp==2.9.0
@@ -23,3 +24,4 @@ pytest==7.4.3
 httpx==0.25.1
 
 email-validator>=2.0.0
+
