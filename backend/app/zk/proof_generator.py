@@ -87,7 +87,7 @@ def generate_proximity_proof(
             # Step 1: Generate witness
             logger.info("📝 Generating witness...")
             witness_result = subprocess.run(
-                ['snarkjs', 'wtns', 'calculate', WASM_PATH, input_path, witness_path],
+                ['npx','snarkjs', 'wtns', 'calculate', WASM_PATH, input_path, witness_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
