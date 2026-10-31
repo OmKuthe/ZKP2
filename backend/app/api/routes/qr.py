@@ -1,4 +1,6 @@
 # backend/app/api/routes/qr.py
+from sqlite3 import IntegrityError
+
 from fastapi import APIRouter, HTTPException, Depends, Query
 from datetime import datetime
 import time
@@ -142,7 +144,15 @@ async def create_session(
     )
 
     db.add(new_session)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        # Flaw #4: lost the race with another entry request.
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active session."
+        )
     db.refresh(new_session)
 
     return EntryResponse(

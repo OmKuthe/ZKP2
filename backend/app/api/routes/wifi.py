@@ -242,32 +242,83 @@ async def verify_wifi_environment(
     db.add(verification)
 
     # 7. If anomaly, create an Anomaly record
+        # 7. If anomaly, create or update an Anomaly record.
+    #
+    # Flaw #6: do NOT create a new Anomaly row per failed verify. One incident
+    # = one Anomaly row, from start to resolution.
+    #
+    # - If an UNRESOLVED environment_mismatch anomaly already exists for this
+    #   session, update its severity (MEDIUM -> HIGH as failures accumulate)
+    #   and append a note to its description. Return the existing anomaly_id.
+    # - If there is no unresolved anomaly for this session (none ever, or the
+    #   previous one was resolved), create a new one — but only after the
+    #   second consecutive failure, same as before.
     anomaly_id = None
     if result["is_anomaly"]:
-        # Escalation logic: only create anomaly after 2 consecutive failures
-        # (protects against transient drops — e.g., one flaky scan)
         if session.wifi_fail_count >= 2:
             severity = "HIGH" if session.wifi_fail_count >= 4 else "MEDIUM"
-            anomaly = Anomaly(
-                session_id=session.id,
-                student_id=session.student_id,
-                company_id=session.company_id,
-                type="environment_mismatch",
-                severity=severity,
-                description=(
-                    f"Wi-Fi environment mismatch: JSR score {result['jsr_score']:.2f} "
-                    f"below threshold {result['threshold']:.2f}. "
-                    f"{session.wifi_fail_count} consecutive failures."
-                ),
-                resolved=False,
+
+            existing_anomaly = (
+                db.query(Anomaly)
+                .filter(
+                    Anomaly.session_id == session.id,
+                    Anomaly.type == "environment_mismatch",
+                    Anomaly.resolved == False,
+                )
+                .order_by(Anomaly.id.desc())
+                .first()
             )
-            db.add(anomaly)
-            db.flush()  # Get anomaly.id
-            anomaly_id = anomaly.id
-            logger.warning(
-                f"🚨 Anomaly created: id={anomaly_id}, "
-                f"session={request.session_id}, score={result['jsr_score']}"
-            )
+
+            if existing_anomaly is not None:
+                # Escalate severity if the failure count crossed a threshold.
+                previous_severity = existing_anomaly.severity
+                existing_anomaly.severity = severity
+
+                # Append to description so the incident log grows over time.
+                # Cap the appended text so the row doesn't grow unbounded on a
+                # very long walk — keep the last ~5 updates.
+                note = (
+                    f"[{datetime.utcnow().isoformat(timespec='seconds')}Z] "
+                    f"JSR {result['jsr_score']:.2f} < {result['threshold']:.2f}, "
+                    f"fail_count={session.wifi_fail_count}, severity={severity}"
+                )
+                if existing_anomaly.description:
+                    existing_anomaly.description = (
+                        existing_anomaly.description + "\n" + note
+                    )
+                else:
+                    existing_anomaly.description = note
+
+                anomaly_id = existing_anomaly.id
+                logger.warning(
+                    f"🔁 Anomaly updated (not duplicated): id={anomaly_id}, "
+                    f"session={request.session_id}, "
+                    f"severity {previous_severity} -> {severity}, "
+                    f"fail_count={session.wifi_fail_count}"
+                )
+            else:
+                # No unresolved anomaly for this session — create one.
+                anomaly = Anomaly(
+                    session_id=session.id,
+                    student_id=session.student_id,
+                    company_id=session.company_id,
+                    type="environment_mismatch",
+                    severity=severity,
+                    description=(
+                        f"Wi-Fi environment mismatch: JSR score {result['jsr_score']:.2f} "
+                        f"below threshold {result['threshold']:.2f}. "
+                        f"{session.wifi_fail_count} consecutive failures."
+                    ),
+                    resolved=False,
+                )
+                db.add(anomaly)
+                db.flush()  # Get anomaly.id
+                anomaly_id = anomaly.id
+                logger.warning(
+                    f"🚨 Anomaly created: id={anomaly_id}, "
+                    f"session={request.session_id}, score={result['jsr_score']}, "
+                    f"severity={severity}"
+                )
         else:
             logger.info(
                 f"📶 First Wi-Fi failure ({session.wifi_fail_count}). "

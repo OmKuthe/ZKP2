@@ -1,13 +1,21 @@
 // app/types/navigation.ts
+import { NavigatorScreenParams } from '@react-navigation/native';
+
+export type MainTabParamList = {
+  Home: { faceVerified?: boolean } | undefined;
+  History: undefined;
+  Calendar: undefined;
+  Profile: undefined;
+};
+
 export type RootStackParamList = {
   Login: undefined;
-  Dashboard: { studentId: string; faceVerified?: boolean };
+  MainTabs: NavigatorScreenParams<MainTabParamList>;
+  FaceVerify: undefined; // studentId comes from context
   QRScanner: {
-    studentId: string;
     qrPayload?: any;
     purpose: 'entry' | 'exit';
   };
-  FaceVerify: { studentId: string };
 };
 
 declare global {

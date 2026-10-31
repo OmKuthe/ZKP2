@@ -6,7 +6,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
-from .core.database import engine, Base
+from .core.database import (
+    engine,
+    Base,
+    _ensure_unique_active_session_index,
+)
 
 # Import all models so they get registered
 from .models import (
@@ -17,14 +21,17 @@ from .models import (
     Anomaly,
     Internship,
     InternshipAssignment,
-    WiFiTemplate,       
-    WiFiVerification,   
+    WiFiTemplate,
+    WiFiVerification,
 )
 # Import API router
 from .api import router as api_router
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Flaw #4: enforce at most one active session per student, at the DB level.
+_ensure_unique_active_session_index()
 
 # Initialize app
 app = FastAPI(

@@ -6,11 +6,12 @@ Includes Phase 2B: Counter-based Hash Chain
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session as DBSession
 from datetime import datetime
+from sqlalchemy.exc import IntegrityError
 import time
 import uuid
 import logging
 
-from ...models import Student, Internship, InternshipAssignment, Session, Company, ContinuityCheck
+from ...models import Student, Internship, InternshipAssignment, Session, Company, ContinuityCheck , Anomaly
 from ...core.database import get_db
 from ...schemas.student import (
     StudentEntryRequest,
@@ -251,11 +252,23 @@ async def complete_entry(
     )
     
     db.add(new_session)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        # Flaw #4: another request won the race and created an active
+        # session for this student between our app-level check and now.
+        logger.warning(
+            f"⚠️ IntegrityError on session insert (race lost): {e}"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an active session. Please exit first."
+        )
     db.refresh(new_session)
-    
+
     logger.info(f"✅ Session created: {session_id}")
-    
+
     return StudentEntryResponse(
         session_id=session_id,
         message="Entry verified successfully. Hash chain started.",
@@ -265,7 +278,6 @@ async def complete_entry(
 
 
 # ==================== Continuity Check ====================
-
 @router.post("/verify-continuity", response_model=ContinuityCheckResponse)
 async def verify_continuity(
     request: ContinuityCheckRequest,
@@ -274,24 +286,25 @@ async def verify_continuity(
     """
     Verify continuity using counter-based approach.
     ✅ Stores each check in the database for tracking.
+    ✅ Flaw #9: detects heartbeat gaps (client silent for > 2 * interval).
     """
     logger.info(f"🔍 Continuity check for session: {request.session_id}")
-    
+
     # 1. Get session
     session = db.query(Session).filter(
         Session.session_id == request.session_id,
         Session.status == "active"
     ).first()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Active session not found")
-    
+
     if not session.hash_chain_seed:
         raise HTTPException(status_code=400, detail="No hash chain seed found")
-    
+
     # 2. Get the next counter value
     next_counter = session.hash_counter + 1
-    
+
     # 3. Verify the provided hash
     hash_service = HashChainService()
     is_valid = hash_service.verify_hash(
@@ -299,11 +312,56 @@ async def verify_continuity(
         counter=next_counter,
         provided_hash=request.hash_link
     )
-    
+
+    # ============================================================
+    # Flaw #9: heartbeat gap detection
+    # ============================================================
+    # Compute the gap between the previous check and this one. If it
+    # exceeds 2x the expected interval, we have a silent window that
+    # the client is not explaining. We still accept the hash (don't
+    # lock the user out) but we record an Anomaly so the gap is visible
+    # to admins and to the History timeline.
+    # ============================================================
+    now_ts = request.timestamp
+    expected_interval = session.check_interval_seconds or 60
+    max_gap = expected_interval * 2
+
+    gap_seconds = None
+    gap_detected = False
+    gap_severity = None
+
+    if session.last_hash_check is not None:
+        last_ts = int(session.last_hash_check.timestamp())
+        gap_seconds = now_ts - last_ts
+
+        if gap_seconds > max_gap:
+            gap_detected = True
+            # MEDIUM for a moderate gap (2x - 10x interval),
+            # HIGH for a long gap (10x+ interval — session was effectively suspended).
+            if gap_seconds > expected_interval * 10:
+                gap_severity = "HIGH"
+            else:
+                gap_severity = "MEDIUM"
+
+            logger.warning(
+                f"⚠️ Continuity gap detected for session {request.session_id}: "
+                f"{gap_seconds}s since last check (expected ~{expected_interval}s, "
+                f"max tolerance {max_gap}s, severity={gap_severity})"
+            )
+
     # 4. ✅ Store continuity check in database
     status = "verified" if is_valid else "failed"
-    message = "Hash chain verification passed" if is_valid else "Hash chain verification failed"
-    
+    if not is_valid:
+        message = "Hash chain verification failed"
+    elif gap_detected:
+        message = (
+            f"Hash verified, but gap of {gap_seconds}s detected "
+            f"since last check (expected ~{expected_interval}s) — "
+            f"session flagged for review"
+        )
+    else:
+        message = "Hash chain verification passed"
+
     check = ContinuityCheck(
         session_id=session.id,
         check_time=datetime.fromtimestamp(request.timestamp),
@@ -314,12 +372,12 @@ async def verify_continuity(
         message=message
     )
     db.add(check)
-    
+
     if not is_valid:
         logger.warning(f"❌ Hash verification failed for session {request.session_id}")
         logger.warning(f"   Expected: {hash_service.get_hash(session.hash_chain_seed, next_counter)}")
         logger.warning(f"   Received: {request.hash_link}")
-        
+
         db.commit()
         return ContinuityCheckResponse(
             verified=False,
@@ -327,22 +385,45 @@ async def verify_continuity(
             next_check_seconds=session.check_interval_seconds or 60,
             current_index=session.hash_counter
         )
-    
-    # 5. Update session
+
+    # 5. Flaw #9: create Anomaly row for a detected gap (don't block, just record)
+    if gap_detected:
+        gap_anomaly = Anomaly(
+            session_id=session.id,
+            student_id=session.student_id,
+            company_id=session.company_id,
+            type="continuity_gap",
+            severity=gap_severity,
+            description=(
+                f"Continuity heartbeat gap: {gap_seconds}s since last check "
+                f"(expected ~{expected_interval}s, max tolerance {max_gap}s). "
+                f"Counter moved {session.hash_counter} -> {next_counter}."
+            ),
+            resolved=False,
+        )
+        db.add(gap_anomaly)
+        logger.warning(
+            f"🚨 Continuity gap anomaly recorded: "
+            f"session={request.session_id}, gap={gap_seconds}s, severity={gap_severity}"
+        )
+
+    # 6. Update session
     session.hash_counter = next_counter
     session.last_hash_check = datetime.fromtimestamp(request.timestamp)
     db.commit()
-    
+
     logger.info(f"✅ Continuity check passed for session {request.session_id}")
     logger.info(f"   Counter: {session.hash_counter}")
-    
+
     return ContinuityCheckResponse(
         verified=True,
-        message=f"Continuity verified successfully. Counter: {session.hash_counter}",
+        message=(
+            f"Continuity verified successfully. Counter: {session.hash_counter}."
+            + (f" ⚠️ Gap of {gap_seconds}s detected." if gap_detected else "")
+        ),
         next_check_seconds=session.check_interval_seconds or 60,
         current_index=session.hash_counter
     )
-
 
 # ==================== Get Continuity Checks ====================
 

@@ -4,7 +4,6 @@ import axios from 'axios';
 export const API_URL = 'http://localhost:8000/api';
 
 const api = axios.create({
-
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 30000,
@@ -111,6 +110,12 @@ export const studentAPI = {
   // Get continuity checks for tracking timeline
   getContinuityChecks: (sessionId: string) =>
     api.get(`/student/session/checks/${sessionId}`),
+
+  // ✅ Get past session history (used by HistoryScreen).
+  // Route lives in qr.py without a router prefix, so the path is
+  // /api/history/{id}, not /api/student/history/{id}.
+  getHistory: (studentId: string) =>
+    api.get(`/history/${studentId}`),
 
   // ============================================================
   // Wi-Fi Fingerprinting API

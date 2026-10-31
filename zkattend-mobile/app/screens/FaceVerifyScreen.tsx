@@ -2,16 +2,19 @@
 /**
  * Face liveness verification — Step 2, Path 2 (blink transition).
  *
- * Captures 8 frames ~300ms apart (~2.4s total) and looks for an actual
- * blink transition: at least one frame with both eyes CLOSED, followed
- * by a later frame with both eyes OPEN.
+ * Fixes applied:
+ *   - CameraView has NO children (Android crash fix)
+ *   - Overlay is a sibling View with absolute positioning
+ *   - onCameraReady guard before takePictureAsync
+ *   - isMountedRef guard to prevent setState after unmount
+ *   - handleVerified wrapped in try/catch
  *
- * This is stronger than "eyes open in N frames" because a static photo
- * cannot produce a state change. A video replay could still pass, so
- * this remains a non-adversarial liveness check — but it closes the
- * "hold up a printed photo" gap.
+ * StudentContext migration (file #9 of 9):
+ *   - No longer reads route.params.studentId (identity comes from context)
+ *   - Returns to Home via navigate('MainTabs', { screen: 'Home', params: { faceVerified } })
+ *   - `faceVerified` remains the one-shot signal consumed by DashboardScreen
  */
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -22,7 +25,7 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import {
   FaceDetectionProvider,
   useFaceDetection,
@@ -36,9 +39,6 @@ type FaceVerifyNavigationProp = NativeStackNavigationProp<
   'FaceVerify'
 >;
 
-// ============================================================
-// Detector options — classificationMode MUST be true
-// ============================================================
 const FACE_DETECTION_OPTIONS: RNMLKitFaceDetectorOptions = {
   performanceMode: 'fast',
   classificationMode: true,
@@ -51,10 +51,8 @@ const FACE_DETECTION_OPTIONS: RNMLKitFaceDetectorOptions = {
 const FRAMES_PER_ATTEMPT = 8;
 const FRAME_INTERVAL_MS = 300;
 const MAX_ATTEMPTS = 3;
-
-// Blink transition thresholds
-const EYE_CLOSED_THRESHOLD = 0.3;  // both eyes below this = closed
-const EYE_OPEN_THRESHOLD = 0.7;    // both eyes above this = open
+const EYE_CLOSED_THRESHOLD = 0.3;
+const EYE_OPEN_THRESHOLD = 0.7;
 
 interface FrameResult {
   leftOpen: number;
@@ -62,10 +60,6 @@ interface FrameResult {
   isClosed: boolean;
   isOpen: boolean;
 }
-
-// ============================================================
-// Inner component
-// ============================================================
 
 interface InnerProps {
   onVerified: (passed: boolean) => void;
@@ -76,14 +70,22 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
   const [permission, requestPermission] = useCameraPermissions();
   const detector = useFaceDetection();
   const cameraRef = useRef<CameraView>(null);
+  const isMountedRef = useRef(true);
 
   const [attemptsLeft, setAttemptsLeft] = useState(MAX_ATTEMPTS);
   const [busy, setBusy] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [status, setStatus] = useState('Position your face inside the frame');
 
-  // Capture a single frame and extract eye-open probabilities.
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const captureFrame = async (): Promise<FrameResult | null> => {
-    if (!cameraRef.current) return null;
+    if (!cameraRef.current || !cameraReady) return null;
 
     try {
       const photo = await cameraRef.current.takePictureAsync({
@@ -121,15 +123,15 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     }
   };
 
-  // One attempt = 8 frames. Look for closed → open transition.
   const runAttempt = async () => {
-    if (busy) return;
+    if (busy || !cameraReady) return;
     setBusy(true);
     setStatus('Watching for a blink… please blink naturally');
 
     const frames: FrameResult[] = [];
 
     for (let i = 0; i < FRAMES_PER_ATTEMPT; i++) {
+      if (!isMountedRef.current) return;
       setStatus(
         `Capturing frame ${i + 1}/${FRAMES_PER_ATTEMPT} — blink naturally`
       );
@@ -141,7 +143,8 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
       }
     }
 
-    // Log the sequence for debugging
+    if (!isMountedRef.current) return;
+
     console.log(
       '🧠 FaceVerify sequence:',
       frames
@@ -153,7 +156,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
         .join(' | ')
     );
 
-    // Check for closed → open transition
     let sawClosed = false;
     let transitionDetected = false;
 
@@ -198,9 +200,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     );
   };
 
-  // ----------------------------------------------------------
-  // Permission handling
-  // ----------------------------------------------------------
   if (!permission) {
     return (
       <View style={styles.center}>
@@ -228,28 +227,44 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     );
   }
 
+  // ⚠️ CameraView must have NO children. Overlay is a sibling.
   return (
     <View style={styles.container}>
-      <CameraView ref={cameraRef} style={styles.camera} facing="front" />
-      <View style={styles.overlay}>
-        <View style={styles.frame} />
-        <Text style={styles.status}>{status}</Text>
-        <Text style={styles.attempts}>
+      <CameraView
+        ref={cameraRef}
+        style={StyleSheet.absoluteFill}
+        facing="front"
+        onCameraReady={() => setCameraReady(true)}
+      />
+
+      <View style={styles.overlay} pointerEvents="box-none">
+        <View style={styles.frame} pointerEvents="none" />
+        <Text style={styles.status} pointerEvents="none">
+          {status}
+        </Text>
+        <Text style={styles.attempts} pointerEvents="none">
           Attempts left: {attemptsLeft} / {MAX_ATTEMPTS}
         </Text>
       </View>
 
       <View style={styles.controls}>
         <TouchableOpacity
-          style={[styles.primaryButton, busy && styles.buttonDisabled]}
+          style={[
+            styles.primaryButton,
+            (busy || !cameraReady) && styles.buttonDisabled,
+          ]}
           onPress={runAttempt}
-          disabled={busy}
+          disabled={busy || !cameraReady}
         >
           {busy ? (
             <ActivityIndicator color="#fff" />
           ) : (
             <Text style={styles.primaryButtonText}>
-              {attemptsLeft === MAX_ATTEMPTS ? 'Start Verification' : 'Retry'}
+              {attemptsLeft === MAX_ATTEMPTS
+                ? cameraReady
+                  ? 'Start Verification'
+                  : 'Starting camera…'
+                : 'Retry'}
             </Text>
           )}
         </TouchableOpacity>
@@ -262,21 +277,20 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
   );
 }
 
-// ============================================================
-// Outer screen
-// ============================================================
-
 const FaceVerifyScreen = () => {
   const navigation = useNavigation<FaceVerifyNavigationProp>();
-  const route = useRoute();
-  const { studentId } = route.params as { studentId: string };
 
   const handleVerified = (passed: boolean) => {
-    navigation.navigate({
-      name: 'Dashboard',
-      params: { studentId, faceVerified: passed } as any,
-      merge: true,
-    });
+    try {
+      // ✅ Home no longer takes studentId — identity lives in context.
+      //    faceVerified is still the one-shot signal DashboardScreen reads.
+      navigation.navigate('MainTabs', {
+        screen: 'Home',
+        params: { faceVerified: passed },
+      });
+    } catch (err) {
+      console.error('❌ FaceVerify navigate error:', err);
+    }
   };
 
   const handleCancel = () => {
@@ -310,7 +324,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
   },
-  camera: { flex: 1 },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.35)',
@@ -337,8 +350,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   controls: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     padding: 20,
-    backgroundColor: '#000',
+    backgroundColor: 'rgba(0,0,0,0.85)',
     gap: 12,
   },
   primaryButton: {

@@ -11,15 +11,11 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
 import api from '../api/client';
-import { RootStackParamList } from '../types/navigation';
-
-type LoginScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Login'>;
+import { useStudent } from '../context/StudentContext';
 
 const LoginScreen = () => {
-  const navigation = useNavigation<LoginScreenNavigationProp>();
+  const { setStudentId: setContextStudentId } = useStudent();
   const [studentId, setStudentId] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -31,10 +27,13 @@ const LoginScreen = () => {
 
     setLoading(true);
     try {
-      const response = await api.get(`/admin/students/${studentId.toUpperCase()}`);
+      const response = await api.get(
+        `/admin/students/${studentId.toUpperCase()}`
+      );
       console.log('✅ Student found:', response.data);
       if (response.data) {
-        navigation.replace('Dashboard', { studentId: studentId.toUpperCase() });
+        // ✅ Set the context — RootNavigator swaps Login → MainTabs automatically
+        setContextStudentId(studentId.toUpperCase());
       }
     } catch (error: any) {
       console.error('❌ Login error:', error);
@@ -79,7 +78,11 @@ const LoginScreen = () => {
           onPress={handleLogin}
           disabled={loading}
         >
-          {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.buttonText}>Continue</Text>}
+          {loading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Continue</Text>
+          )}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
