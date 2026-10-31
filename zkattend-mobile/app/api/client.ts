@@ -1,7 +1,7 @@
 // zkattend-mobile/app/api/client.ts
 import axios from 'axios';
 
-export const API_URL = 'https://zkattend.onrender.com/api';
+export const API_URL = 'https://zkp2.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_URL,
