@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY backend/ .
 
-# Verify snarkjs is available (optional, for logs)
+# Verify snarkjs is available
 RUN snarkjs --version
 
 # Start command
