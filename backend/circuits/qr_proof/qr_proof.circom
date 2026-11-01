@@ -1,5 +1,8 @@
 pragma circom 2.1.9;
 
+// Import the comparator from circomlib
+include "circomlib/circuits/comparators.circom";
+
 template QRProof() {
     // Public inputs
     signal input pub_class_x;
@@ -10,7 +13,7 @@ template QRProof() {
     signal input priv_student_x;
     signal input priv_student_y;
     
-    // Calculate differences using <==
+    // Calculate differences
     signal dx;
     signal dy;
     dx <== priv_student_x - pub_class_x;
@@ -26,17 +29,14 @@ template QRProof() {
     signal dist_sq;
     dist_sq <== dx_sq + dy_sq;
     
-    // Prove that pub_radius_sq - dist_sq >= 0
-    signal sqrt_diff;
-    sqrt_diff <== pub_radius_sq - dist_sq;
+    // Use LessEqThan to check dist_sq <= pub_radius_sq
+    // 32 means we check up to 32 bits of precision (enough for our scaled coordinates)
+    component lessEq = LessEqThan(32);
+    lessEq.in[0] <== dist_sq;
+    lessEq.in[1] <== pub_radius_sq;
     
-    // Enforce that sqrt_diff is non-negative by checking it is a sum of squares
-    // (In Circom, we can just assert it's a valid field element, but for Groth16 
-    // we must enforce a constraint. We will just enforce equality for the demo).
-    // To actually prove <=, you need circomlib's LessThan. Since we don't have it, 
-    // we will prove that the distance equals the radius (worst case scenario for proximity).
-    // For your demo, this is fine as a proof of concept.
-    dist_sq === pub_radius_sq;
+    // Enforce that the output is 1 (true)
+    lessEq.out === 1;
 }
 
 component main = QRProof();
