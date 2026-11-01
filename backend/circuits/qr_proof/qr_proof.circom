@@ -30,8 +30,8 @@ template QRProof() {
     dist_sq <== dx_sq + dy_sq;
     
     // Use LessEqThan to check dist_sq <= pub_radius_sq
-    // 32 means we check up to 32 bits of precision (enough for our scaled coordinates)
-    component lessEq = LessEqThan(32);
+    // 64 means we check up to 64 bits of precision (enough for our scaled coordinates)
+    component lessEq = LessEqThan(64);
     lessEq.in[0] <== dist_sq;
     lessEq.in[1] <== pub_radius_sq;
     
