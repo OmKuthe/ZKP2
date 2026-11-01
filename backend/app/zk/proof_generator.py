@@ -87,11 +87,10 @@ def generate_proximity_proof(
             # Step 1: Generate witness
             logger.info("📝 Generating witness...")
             witness_result = subprocess.run(
-                ['snarkjs', 'wtns', 'calculate', WASM_PATH, input_path, witness_path],
+                ['npx','snarkjs', 'wtns', 'calculate', WASM_PATH, input_path, witness_path],
                 capture_output=True,
                 text=True,
-                timeout=30,
-                shell=True
+                timeout=30
             )
             
             if witness_result.returncode != 0:
@@ -104,11 +103,10 @@ def generate_proximity_proof(
             # Step 2: Generate proof
             logger.info("🔐 Generating proof...")
             proof_result = subprocess.run(
-                ['snarkjs', 'groth16', 'prove', ZKEY_PATH, witness_path, proof_path, pub_path],
+                ['npx','snarkjs', 'groth16', 'prove', ZKEY_PATH, witness_path, proof_path, pub_path],
                 capture_output=True,
                 text=True,
-                timeout=60,
-                shell=True
+                timeout=60
             )
             
             if proof_result.returncode != 0:
