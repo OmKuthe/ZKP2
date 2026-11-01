@@ -3,7 +3,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000/api';
+//const API_BASE = 'http://localhost:8000/api';
+import api from '../api/client';
 
 const ManagerLogin = () => {
   const navigate = useNavigate();
@@ -20,7 +21,7 @@ const ManagerLogin = () => {
     setError('');
 
     try {
-      const response = await axios.post(`${API_BASE}/auth/login`, {
+      const response = await axios.post(`/auth/login`, {
         username,
         password
       });
