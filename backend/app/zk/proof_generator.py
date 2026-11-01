@@ -95,6 +95,7 @@ def generate_proximity_proof(
             )
             
             if witness_result.returncode != 0:
+                logger.error(f"❌ Witness stderr: {witness_result.stdout}")
                 logger.error(f"❌ Witness stderr: {witness_result.stderr}")
                 raise RuntimeError(f"Witness generation failed: {witness_result.stderr}")
             
