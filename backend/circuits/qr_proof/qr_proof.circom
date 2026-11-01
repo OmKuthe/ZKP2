@@ -34,4 +34,4 @@ template QRProof() {
     is_inside === 1;
 }
 
-component main {public [commitment, student_id]} = QRProof();
+component main = QRProof();
