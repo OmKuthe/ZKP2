@@ -68,8 +68,7 @@ class QRProofVerifier:
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=30,
-                    shell=True
+                    timeout=30
                 )
                 
                 if result.returncode == 0 and 'OK' in result.stdout:
