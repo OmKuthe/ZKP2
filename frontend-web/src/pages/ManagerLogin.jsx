@@ -1,9 +1,6 @@
 // frontend-web/src/pages/ManagerLogin.jsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-
-//const API_BASE = 'http://localhost:8000/api';
 import api from '../api/client';
 
 const ManagerLogin = () => {
@@ -13,18 +10,13 @@ const ManagerLogin = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // ✅ Remove the auto-redirect useEffect - it causes infinite loop
-
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      const response = await axios.post(`/auth/login`, {
-        username,
-        password
-      });
+      const response = await api.post('/auth/login', { username, password });
       
       console.log('✅ Login successful:', response.data);
       
@@ -32,10 +24,8 @@ const ManagerLogin = () => {
       localStorage.setItem('token', response.data.access_token);
       localStorage.setItem('role', response.data.role);
       
-      console.log('✅ Token stored, redirecting to /manager');
-      
-      // ✅ Use window.location for guaranteed redirect
-      window.location.href = '/manager';
+      // ✅ Use React Router navigate (NO page reload)
+      navigate('/manager');
       
     } catch (err) {
       console.error('❌ Login error:', err);
@@ -75,7 +65,7 @@ const ManagerLogin = () => {
           </div>
 
           {error && (
-            <div className="bg-danger-50 text-danger-600 text-sm p-3 rounded-lg">
+            <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg">
               {error}
             </div>
           )}
