@@ -10,7 +10,7 @@ const ManagerLogin = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleLogin = async (e) => {
+    const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
@@ -24,8 +24,8 @@ const ManagerLogin = () => {
       localStorage.setItem('token', response.data.access_token);
       localStorage.setItem('role', response.data.role);
       
-      // ✅ Use React Router navigate (NO page reload)
-      navigate('/manager');
+      // ✅ Force a hard redirect so App.jsx reads the new token from localStorage
+      window.location.href = '/manager';
       
     } catch (err) {
       console.error('❌ Login error:', err);
