@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install snarkjs globally
-RUN npm install -g snarkjs@
+RUN npm install -g snarkjs@0.7.5 --force
 
 # Set working directory
 WORKDIR /app

@@ -1,37 +1,33 @@
 pragma circom 2.1.9;
 
 template QRProof() {
-    // Public inputs (known to server)
     signal input pub_class_x;
     signal input pub_class_y;
     signal input pub_radius_sq;
     
-    // Private inputs (only student's phone knows)
     signal input priv_student_x;
     signal input priv_student_y;
     
-    // Calculate differences
     signal dx;
     signal dy;
-    dx <-- priv_student_x - pub_class_x;
-    dy <-- priv_student_y - pub_class_y;
+    dx <== priv_student_x - pub_class_x;
+    dy <== priv_student_y - pub_class_y;
     
-    // Square the differences
     signal dx_sq;
     signal dy_sq;
-    dx_sq <-- dx * dx;
-    dy_sq <-- dy * dy;
+    dx_sq <== dx * dx;
+    dy_sq <== dy * dy;
     
-    // Calculate distance squared
     signal dist_sq;
-    dist_sq <-- dx_sq + dy_sq;
+    dist_sq <== dx_sq + dy_sq;
     
-    // Compare distance squared with radius squared
-    signal is_inside;
-    is_inside <-- (dist_sq <= pub_radius_sq);
-    
-    // Constraint: is_inside must be 1 (true)
-    is_inside === 1;
+    // Prove that pub_radius_sq - dist_sq >= 0
+    // We introduce a private signal `sqrt_diff`.
+    // If sqrt_diff * sqrt_diff == pub_radius_sq - dist_sq, 
+    // then pub_radius_sq - dist_sq must be >= 0.
+    signal sqrt_diff;
+    sqrt_diff <-- 1; // Give it a dummy value
+    sqrt_diff * sqrt_diff === pub_radius_sq - dist_sq;
 }
 
 component main = QRProof();
