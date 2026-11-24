@@ -2,25 +2,30 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../api/client';
+import StudentDetailDrawer from '../components/StudentDetailDrawer';
+import ReportsModal from '../components/ReportsModal';
 
 const ManagerInternshipDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+
   const [internship, setInternship] = useState(null);
   const [students, setStudents] = useState([]);
   const [availableStudents, setAvailableStudents] = useState([]);
   const [loading, setLoading] = useState(true);
+
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showReportsModal, setShowReportsModal] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState([]);
+  const [selectedStudent, setSelectedStudent] = useState(null);
   const [message, setMessage] = useState('');
 
   const fetchData = async () => {
     try {
       const [detailRes, availableRes] = await Promise.all([
         api.get(`/manager/internship/${id}`),
-        api.get(`/manager/internship/${id}/available-students`)
+        api.get(`/manager/internship/${id}/available-students`),
       ]);
-      
       setInternship(detailRes.data.internship);
       setStudents(detailRes.data.students || []);
       setAvailableStudents(availableRes.data.available_students || []);
@@ -33,6 +38,7 @@ const ManagerInternshipDetail = () => {
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const handleAssignStudents = async () => {
@@ -40,10 +46,9 @@ const ManagerInternshipDetail = () => {
       setMessage('Please select at least one student');
       return;
     }
-
     try {
       await api.post(`/admin/internships/${id}/assign`, {
-        student_ids: selectedStudents
+        student_ids: selectedStudents,
       });
       setMessage('✅ Students assigned successfully!');
       setSelectedStudents([]);
@@ -56,7 +61,6 @@ const ManagerInternshipDetail = () => {
 
   const handleRemoveStudent = async (studentId) => {
     if (!confirm('Remove this student from the internship?')) return;
-    
     try {
       await api.delete(`/admin/internships/${id}/students/${studentId}`);
       fetchData();
@@ -66,33 +70,30 @@ const ManagerInternshipDetail = () => {
   };
 
   const toggleStudentSelection = (studentId) => {
-    setSelectedStudents(prev =>
-      prev.includes(studentId) 
-        ? prev.filter(id => id !== studentId)
+    setSelectedStudents((prev) =>
+      prev.includes(studentId)
+        ? prev.filter((s) => s !== studentId)
         : [...prev, studentId]
     );
   };
 
-const handleDeleteInternship = async () => {
-  if (!confirm(`Are you sure you want to delete internship "${internship?.name}"? This will remove all student assignments.`)) {
-    return;
-  }
-
-  try {
-    await api.delete(`/admin/internships/${id}`);
-    setMessage('✅ Internship deleted successfully!');
-    setTimeout(() => {
-      navigate('/manager');
-    }, 1500);
-  } catch (error) {
-    setMessage(`❌ Error: ${error.response?.data?.detail || error.message}`);
-  }
-};
+  const handleDeleteInternship = async () => {
+    if (!confirm(`Are you sure you want to delete internship "${internship?.name}"? This will remove all student assignments.`)) {
+      return;
+    }
+    try {
+      await api.delete(`/admin/internships/${id}`);
+      setMessage('✅ Internship deleted successfully!');
+      setTimeout(() => navigate('/manager'), 1500);
+    } catch (error) {
+      setMessage(`❌ Error: ${error.response?.data?.detail || error.message}`);
+    }
+  };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500" />
       </div>
     );
   }
@@ -101,7 +102,7 @@ const handleDeleteInternship = async () => {
     return (
       <div className="card text-center py-12">
         <p className="text-slate-400">Internship not found</p>
-        <Link to="/manager" className="text-primary-600 hover:underline mt-2 inline-block">
+        <Link to="/manager" className="text-primary-500 hover:underline mt-2 inline-block">
           ← Back to Dashboard
         </Link>
       </div>
@@ -110,11 +111,28 @@ const handleDeleteInternship = async () => {
 
   return (
     <div>
-      <div className="flex items-center gap-4 mb-6">
-        <Link to="/manager" className="btn-secondary">← Back</Link>
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">{internship.name}</h1>
-          <p className="text-sm text-slate-500">{internship.company_name}</p>
+      {/* Header */}
+      <div className="flex justify-between items-start mb-6">
+        <div className="flex items-center gap-4">
+          <Link to="/manager" className="btn-secondary">← Back</Link>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">{internship.name}</h1>
+            <p className="text-sm text-slate-500">{internship.company_name}</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowReportsModal(true)}
+            className="btn-primary text-sm px-4 py-1.5"
+          >
+            📊 Reports
+          </button>
+          <button
+            onClick={handleDeleteInternship}
+            className="btn-danger text-sm px-4 py-1.5"
+          >
+            Delete Internship
+          </button>
         </div>
       </div>
 
@@ -124,8 +142,8 @@ const handleDeleteInternship = async () => {
           <div>
             <p className="text-sm text-slate-500">Status</p>
             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-              internship.status === 'active' 
-                ? 'bg-success-500/10 text-success-600' 
+              internship.status === 'active'
+                ? 'bg-success-500 text-white'
                 : 'bg-slate-100 text-slate-500'
             }`}>
               {internship.status || 'Active'}
@@ -133,18 +151,23 @@ const handleDeleteInternship = async () => {
           </div>
           <div>
             <p className="text-sm text-slate-500">Daily Hours</p>
-            <p className="font-medium">{internship.daily_start_time} - {internship.daily_end_time}</p>
+            <p className="font-medium">
+              {internship.daily_start_time} - {internship.daily_end_time}
+            </p>
           </div>
           <div>
             <p className="text-sm text-slate-500">Duration</p>
             <p className="font-medium">
-              {new Date(internship.start_date).toLocaleDateString()} - {new Date(internship.end_date).toLocaleDateString()}
+              {new Date(internship.start_date).toLocaleDateString()} -{' '}
+              {new Date(internship.end_date).toLocaleDateString()}
             </p>
           </div>
           <div>
             <p className="text-sm text-slate-500">Payment</p>
             <p className="font-medium">
-              {internship.is_paid ? `💰 ₹${internship.stipend_amount}/month` : 'Unpaid'}
+              {internship.is_paid
+                ? `💰 ₹${internship.stipend_amount}/month`
+                : 'Unpaid'}
             </p>
           </div>
         </div>
@@ -154,20 +177,6 @@ const handleDeleteInternship = async () => {
           </div>
         )}
       </div>
-      <div className="flex justify-between items-start">
-  <div>
-    <h1 className="text-2xl font-bold text-slate-800">{internship.name}</h1>
-    <p className="text-sm text-slate-500">{internship.company_name}</p>
-  </div>
-  <div className="flex gap-2">
-    <button
-      onClick={handleDeleteInternship}
-      className="btn-danger text-sm px-4 py-1.5"
-    >
-      Delete Internship
-    </button>
-  </div>
-</div>
 
       {/* Students Section */}
       <div className="card">
@@ -200,7 +209,12 @@ const handleDeleteInternship = async () => {
               </thead>
               <tbody>
                 {students.map((student) => (
-                  <tr key={student.id} className="border-b border-slate-100">
+                  <tr
+                    key={student.id}
+                    className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                    onClick={() => setSelectedStudent(student)}
+                    title="Click to view student status"
+                  >
                     <td className="py-2 px-3 font-mono text-xs text-slate-500">
                       {student.student_id}
                     </td>
@@ -211,8 +225,11 @@ const handleDeleteInternship = async () => {
                     </td>
                     <td className="py-2 px-3">
                       <button
-                        onClick={() => handleRemoveStudent(student.id)}
-                        className="text-danger-500 hover:text-danger-700 text-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveStudent(student.id);
+                        }}
+                        className="text-danger-500 hover:text-danger-600 text-sm"
                       >
                         Remove
                       </button>
@@ -238,24 +255,29 @@ const handleDeleteInternship = async () => {
 
             {message && (
               <div className={`p-3 rounded-lg mb-4 ${
-                message.includes('✅') ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-700'
+                message.includes('✅') ? 'bg-success-500 text-white' : 'bg-danger-500 text-white'
               }`}>
                 {message}
               </div>
             )}
 
             {availableStudents.length === 0 ? (
-              <p className="text-slate-400 text-center py-6">All students are already assigned to internships</p>
+              <p className="text-slate-400 text-center py-6">
+                All students are already assigned to internships
+              </p>
             ) : (
               <>
                 <div className="border rounded-lg divide-y max-h-60 overflow-y-auto mb-4">
                   {availableStudents.map((student) => (
-                    <label key={student.id} className="flex items-center gap-3 p-3 hover:bg-slate-50 cursor-pointer">
+                    <label
+                      key={student.id}
+                      className="flex items-center gap-3 p-3 hover:bg-slate-50 cursor-pointer"
+                    >
                       <input
                         type="checkbox"
                         checked={selectedStudents.includes(student.id)}
                         onChange={() => toggleStudentSelection(student.id)}
-                        className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
+                        className="w-4 h-4 text-primary-500 rounded"
                       />
                       <div>
                         <span className="font-medium text-slate-700">{student.name}</span>
@@ -271,16 +293,10 @@ const handleDeleteInternship = async () => {
                     {selectedStudents.length} student(s) selected
                   </span>
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => setShowAssignModal(false)}
-                      className="btn-secondary"
-                    >
+                    <button onClick={() => setShowAssignModal(false)} className="btn-secondary">
                       Cancel
                     </button>
-                    <button
-                      onClick={handleAssignStudents}
-                      className="btn-primary"
-                    >
+                    <button onClick={handleAssignStudents} className="btn-primary">
                       Assign Students
                     </button>
                   </div>
@@ -289,6 +305,24 @@ const handleDeleteInternship = async () => {
             )}
           </div>
         </div>
+      )}
+
+      {/* Reports Modal */}
+      {showReportsModal && (
+        <ReportsModal
+          internship={internship}
+          students={students}
+          onClose={() => setShowReportsModal(false)}
+        />
+      )}
+
+      {/* Student detail drawer */}
+      {selectedStudent && (
+        <StudentDetailDrawer
+          student={selectedStudent}
+          internship={internship}
+          onClose={() => setSelectedStudent(null)}
+        />
       )}
     </div>
   );

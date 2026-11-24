@@ -6,6 +6,9 @@ import ManagerDashboard from './pages/ManagerDashboard';
 import ManagerInternshipDetail from './pages/ManagerInternshipDetail';
 import ManagerCreateInternship from './pages/ManagerCreateInternship';
 import ManagerStudents from './pages/ManagerStudents';
+import FlaggedSessions from './components/FlaggedSession';
+import SessionDetail from './pages/SessionDetail';
+import Analytics from './pages/Analytics';
 
 function App() {
   const token = localStorage.getItem('token');
@@ -14,7 +17,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/manager/login" element={<ManagerLogin />} />
-        
+
         <Route path="/manager" element={
           token ? <ManagerLayout /> : <Navigate to="/manager/login" replace />
         }>
@@ -22,8 +25,11 @@ function App() {
           <Route path="students" element={<ManagerStudents />} />
           <Route path="internships/:id" element={<ManagerInternshipDetail />} />
           <Route path="internships/create" element={<ManagerCreateInternship />} />
+          <Route path="flagged" element={<FlaggedSessions />} />
+          <Route path="sessions/:id" element={<SessionDetail />} />
+          <Route path="analytics" element={<Analytics />} />
         </Route>
-        
+
         <Route path="/" element={<Navigate to="/manager" replace />} />
         <Route path="*" element={<Navigate to="/manager/login" replace />} />
       </Routes>

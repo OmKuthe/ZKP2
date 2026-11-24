@@ -6,7 +6,7 @@ export const API_URL = 'https://zkp2.onrender.com/api';
 const api = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
+  timeout: 90000,
 });
 
 // Add logging

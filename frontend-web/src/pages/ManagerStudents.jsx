@@ -1,11 +1,13 @@
 // frontend-web/src/pages/ManagerStudents.jsx
 import React, { useState, useEffect } from 'react';
 import api from '../api/client';
+import BulkUploadModal from '../components/BulkUploadModal';
 
 const ManagerStudents = () => {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showBulkModal, setShowBulkModal] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
   const [formData, setFormData] = useState({
@@ -55,24 +57,27 @@ const ManagerStudents = () => {
   };
 
   const handleDeleteStudent = async (studentId, studentName) => {
-    if (!window.confirm(`⚠️ Are you sure you want to delete student "${studentName}" (${studentId})?\n\nThis action cannot be undone.`)) {
+    if (!window.confirm(`⚠️ Are you sure you want to delete student "${studentName}" (${studentId})?`)) {
       return;
     }
-
     try {
       const response = await api.delete(`/admin/students/${studentId}`);
-      showNotification(`✅ ${response.data.message || 'Student deleted successfully'}`, 'success');
-      fetchStudents(); // ✅ Refresh the list after deletion
+      showNotification(`✅ ${response.data.message || 'Student deleted'}`, 'success');
+      fetchStudents();
     } catch (error) {
-      const errorMsg = error.response?.data?.detail || 'Failed to delete student';
-      showNotification(`❌ ${errorMsg}`, 'error');
+      showNotification(`❌ ${error.response?.data?.detail || 'Failed to delete student'}`, 'error');
     }
+  };
+
+  const handleBulkSuccess = () => {
+    fetchStudents();
+    showNotification('✅ Bulk upload complete — see results in the modal', 'success');
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500" />
       </div>
     );
   }
@@ -84,23 +89,27 @@ const ManagerStudents = () => {
           <h1 className="text-2xl font-bold text-slate-800">Students</h1>
           <p className="text-sm text-slate-500">Manage all students in the system</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-primary">
-          + Add Student
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowBulkModal(true)} className="btn-secondary">
+            📄 Bulk Upload CSV
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-primary">
+            + Add Student
+          </button>
+        </div>
       </div>
 
-      {/* Notification Message */}
       {message && (
         <div className={`p-4 rounded-lg mb-4 ${
-          messageType === 'success' ? 'bg-green-50 text-green-700 border border-green-200' :
-          messageType === 'error' ? 'bg-red-50 text-red-700 border border-red-200' :
-          'bg-yellow-50 text-yellow-700 border border-yellow-200'
+          messageType === 'success' ? 'bg-success-500 text-white' :
+          messageType === 'error' ? 'bg-danger-500 text-white' :
+          'bg-warning-500 text-white'
         }`}>
           {message}
         </div>
       )}
 
-      {/* Create Student Modal */}
+      {/* Create Student Modal (unchanged) */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
@@ -167,7 +176,15 @@ const ManagerStudents = () => {
         </div>
       )}
 
-      {/* Students Table */}
+      {/* Bulk upload modal */}
+      {showBulkModal && (
+        <BulkUploadModal
+          onClose={() => setShowBulkModal(false)}
+          onSuccess={handleBulkSuccess}
+        />
+      )}
+
+      {/* Students Table (unchanged) */}
       <div className="card">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -193,7 +210,7 @@ const ManagerStudents = () => {
                     <td className="py-2 px-3 text-slate-600">{student.email}</td>
                     <td className="py-2 px-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                        student.is_active ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+                        student.is_active ? 'bg-success-500 text-white' : 'bg-slate-200 text-slate-600'
                       }`}>
                         {student.is_active ? 'Active' : 'Inactive'}
                       </span>
@@ -201,7 +218,7 @@ const ManagerStudents = () => {
                     <td className="py-2 px-3">
                       <button
                         onClick={() => handleDeleteStudent(student.student_id, student.name)}
-                        className="text-red-600 hover:text-red-800 text-sm font-medium cursor-pointer"
+                        className="text-danger-500 hover:text-danger-600 text-sm font-medium"
                       >
                         Delete
                       </button>

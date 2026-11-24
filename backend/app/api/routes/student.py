@@ -2,17 +2,25 @@
 """
 Student endpoints - Entry, Exit, GPS verification with QR
 Includes Phase 2B: Counter-based Hash Chain
+Includes V2: verification_events, zkp_verifications, face_verifications
 """
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session as DBSession
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 import time
 import uuid
 import logging
 
-from ...models import Student, Internship, InternshipAssignment, Session, Company, ContinuityCheck , Anomaly
+from ...models import (
+    Student, Internship, InternshipAssignment, Session, Company,
+    ContinuityCheck, Anomaly,
+    # V2 models
+    ZkpVerification, FaceVerification, VerificationEvent,
+    VerificationLayer, VerificationEventType,
+)
 from ...core.database import get_db
+from ...core.config import settings
 from ...schemas.student import (
     StudentEntryRequest,
     StudentEntryResponse,
@@ -32,12 +40,29 @@ logger = logging.getLogger(__name__)
 # ✅ Singleton QRService
 _qr_service = None
 
+
 def get_qr_service():
     global _qr_service
     if _qr_service is None:
         _qr_service = QRService()
         logger.info("✅ QRService initialized")
     return _qr_service
+
+
+def _utc_naive() -> datetime:
+    """Return current UTC as a naive datetime (what SQLite stores)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _naive_utc_to_epoch(dt: datetime) -> int:
+    """
+    Epoch seconds for a naive datetime that holds UTC wall-clock time.
+
+    Never call .timestamp() directly on these values: Python treats naive
+    datetimes as machine-local time, which shifts results by the local
+    UTC offset (5h30m on an IST dev machine).
+    """
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
 
 
 # ==================== Start Entry ====================
@@ -53,43 +78,43 @@ async def start_entry(
     """
     logger.info(f"📍 Start entry for student: {request.student_id}")
     logger.info(f"📍 GPS received: lat={request.latitude}, lng={request.longitude}")
-    
+
     # 1. Get student
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     # 2. Get active internship
     assignment = db.query(InternshipAssignment).join(Internship).filter(
         InternshipAssignment.student_id == student.id,
         Internship.status == "active",
         InternshipAssignment.is_active == True
     ).first()
-    
+
     if not assignment:
         raise HTTPException(status_code=404, detail="No active internship found")
-    
+
     internship = db.query(Internship).filter(Internship.id == assignment.internship_id).first()
     company = db.query(Company).filter(Company.id == internship.company_id).first()
-    
+
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
-    
+
     logger.info(f"📍 Company: {company.name}, geofence center: ({company.geofence_center_lat}, {company.geofence_center_lng}), radius: {company.geofence_radius} km")
-    
+
     # 3. Check if student already has active session
     existing_session = db.query(Session).filter(
         Session.student_id == student.id,
         Session.status == "active"
     ).first()
-    
+
     if existing_session:
         return {
             "verified": False,
             "message": "You already have an active session. Please exit first.",
             "qr_data": None
         }
-    
+
     # 4. First check: calculate actual distance (for debugging)
     actual_distance = calculate_distance(
         request.latitude, request.longitude,
@@ -98,7 +123,7 @@ async def start_entry(
     logger.info(f"📊 Actual distance from company: {actual_distance:.4f} km")
     logger.info(f"📊 Radius: {company.geofence_radius} km")
     logger.info(f"📊 Is within radius: {actual_distance <= company.geofence_radius}")
-    
+
     # If not within radius, return early with clear message
     if actual_distance > company.geofence_radius:
         logger.warning(f"❌ Student is outside geofence: {actual_distance:.2f} km > {company.geofence_radius} km")
@@ -109,10 +134,10 @@ async def start_entry(
             "actual_distance": actual_distance,
             "radius": company.geofence_radius
         }
-    
+
     # 5. ✅ Generate Proximity ZKP (privacy-preserving!)
     logger.info("🔐 Generating Proximity ZKP...")
-    
+
     try:
         is_valid, message, proof, public_signals = generate_and_verify_proximity_proof(
             student_lat=request.latitude,
@@ -121,9 +146,9 @@ async def start_entry(
             company_lng=company.geofence_center_lng,
             radius_km=company.geofence_radius
         )
-        
+
         logger.info(f"📊 ZKP Result: is_valid={is_valid}, message={message}")
-        
+
         if not is_valid:
             logger.error(f"❌ Proximity proof failed: {message}")
             return {
@@ -131,10 +156,10 @@ async def start_entry(
                 "message": f"ZKP verification failed: {message}",
                 "qr_data": None
             }
-        
+
         logger.info("✅ Proximity proof verified! Student is within geofence.")
         logger.info(f"   Public signals: {public_signals}")
-        
+
     except Exception as e:
         logger.error(f"❌ ZKP generation error: {e}")
         return {
@@ -142,7 +167,7 @@ async def start_entry(
             "message": f"ZKP error: {str(e)}",
             "qr_data": None
         }
-    
+
     # 6. Generate QR challenge (for entry verification)
     qr_service = get_qr_service()
     challenge = qr_service.generate_challenge(
@@ -150,9 +175,9 @@ async def start_entry(
         company_id=company.id,
         purpose="entry"
     )
-    
+
     logger.info(f"✅ QR generated for {request.student_id}: {challenge.token[:8]}...")
-    
+
     return {
         "verified": True,
         "message": "Location verified using ZKP. QR generated automatically.",
@@ -181,9 +206,10 @@ async def complete_entry(
     """
     Step 2: Student completes entry with QR verification.
     Phase 2B: Generates seed and initializes counter.
+    V2: Emits zkp_verifications, face_verifications, verification_events rows.
     """
     logger.info(f"✅ Complete entry for student: {request.student_id}")
-    
+
     # 1. Verify QR token
     qr_service = get_qr_service()
     result = qr_service.verify_challenge(
@@ -192,75 +218,74 @@ async def complete_entry(
         company_id=request.company_id,
         purpose="entry"
     )
-    
+
     if not result.valid:
         logger.error(f"❌ QR verification failed: {result.message}")
         raise HTTPException(status_code=400, detail=result.message)
-    
+
     # 2. Get student
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     # 3. Check if already has active session
     existing = db.query(Session).filter(
         Session.student_id == student.id,
         Session.status == "active"
     ).first()
-    
+
     if existing:
         raise HTTPException(status_code=400, detail="You already have an active session")
-    
-    # 4. ✅ Generate seed and initialize counter
+
+    # 4. Look up active internship (V2: persist internship_id on session)
+    assignment = db.query(InternshipAssignment).join(Internship).filter(
+        InternshipAssignment.student_id == student.id,
+        Internship.status == "active",
+        InternshipAssignment.is_active == True,
+    ).first()
+    internship_id = assignment.internship_id if assignment else None
+
+    # 5. ✅ Generate seed and initialize counter
     hash_service = HashChainService()
     seed = hash_service.generate_seed()
     logger.info(f"🔐 Hash chain seed generated: {seed[:16]}...")
-    
-        # 5. Create session with hash chain
+
     session_id = f"session_{uuid.uuid4().hex[:12]}"
     entry_time = int(time.time())
-    
+
     # ✅ Step 2: Face liveness result (optional, from client)
-    # NULL  = not attempted (permission denied, camera unavailable)
-    # TRUE  = liveness passed
-    # FALSE = 3 attempts failed; session is still created per "don't lock out" rule
     face_verified = request.face_verified
-    face_verified_at = datetime.now() if face_verified is not None else None
-    
+    face_verified_at = _utc_naive() if face_verified is not None else None
+
     if face_verified is True:
         logger.info(f"✅ Face liveness verified for {request.student_id}")
     elif face_verified is False:
         logger.warning(f"⚠️ Face liveness FAILED for {request.student_id} (session still created)")
     else:
         logger.info(f"ℹ️ Face liveness not attempted for {request.student_id}")
-    
+
     new_session = Session(
         session_id=session_id,
         student_id=student.id,
         company_id=request.company_id,
-        entry_time=datetime.fromtimestamp(entry_time),
+        internship_id=internship_id,  # V2 field
+        entry_time=datetime.fromtimestamp(entry_time, tz=timezone.utc).replace(tzinfo=None),
         qr_token=request.qr_token,
-        # ✅ Counter-based hash chain
         hash_chain_seed=seed,
         hash_counter=0,
         hash_chain_length=100,
-        check_interval_seconds=60,  # ✅ Default: 1 minute
-        # ✅ Step 2: Face liveness
+        check_interval_seconds=60,
         face_verified=face_verified,
         face_verified_at=face_verified_at,
         status="active"
     )
-    
+
     db.add(new_session)
     try:
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        # Flaw #4: another request won the race and created an active
-        # session for this student between our app-level check and now.
-        logger.warning(
-            f"⚠️ IntegrityError on session insert (race lost): {e}"
-        )
+        logger.warning(f"⚠️ IntegrityError on session insert (race lost): {e}")
         raise HTTPException(
             status_code=409,
             detail="You already have an active session. Please exit first."
@@ -269,15 +294,73 @@ async def complete_entry(
 
     logger.info(f"✅ Session created: {session_id}")
 
+    # ============================================================
+    # V2 write paths (gated by V2_WRITE_EVENTS)
+    # ============================================================
+    if settings.V2_WRITE_EVENTS:
+        try:
+            now_utc = datetime.now(timezone.utc)
+
+            # ZKP — reaching here means start-entry's ZKP passed (QR was issued)
+            zkp = ZkpVerification(
+                session_id=new_session.id,
+                purpose="entry",
+                valid=True,
+                message="Verified at start-entry (server-side)",
+                public_signals=request.zkp_public_signals,
+                actual_distance=request.zkp_actual_distance,
+                radius=request.zkp_radius,
+                occurred_at=now_utc,
+            )
+            db.add(zkp)
+            db.flush()
+            db.add(VerificationEvent(
+                session_id=new_session.id,
+                layer=VerificationLayer.zkp,
+                event_type=VerificationEventType.success,
+                occurred_at=now_utc,
+                source_table="zkp_verifications",
+                source_id=zkp.id,
+            ))
+
+            # Face (only if liveness was attempted)
+            if face_verified is not None:
+                fv = FaceVerification(
+                    session_id=new_session.id,
+                    event_type="entry_liveness",
+                    passed=bool(face_verified),
+                    attempts=1,
+                    occurred_at=now_utc,
+                )
+                db.add(fv)
+                db.flush()
+                db.add(VerificationEvent(
+                    session_id=new_session.id,
+                    layer=VerificationLayer.face,
+                    event_type=VerificationEventType.success if face_verified else VerificationEventType.failure,
+                    occurred_at=now_utc,
+                    source_table="face_verifications",
+                    source_id=fv.id,
+                ))
+
+            # Rollup flag on session
+            new_session.zkp_verified = True
+            db.commit()
+            logger.info(f"✅ V2 events written for session {session_id}")
+        except Exception as e:
+            logger.error(f"⚠️ V2 event write failed (non-fatal, session still created): {e}")
+            db.rollback()
+
     return StudentEntryResponse(
         session_id=session_id,
         message="Entry verified successfully. Hash chain started.",
         entry_time=entry_time,
-        seed=seed  # ✅ Send seed to app
+        seed=seed
     )
 
 
 # ==================== Continuity Check ====================
+
 @router.post("/verify-continuity", response_model=ContinuityCheckResponse)
 async def verify_continuity(
     request: ContinuityCheckRequest,
@@ -285,8 +368,8 @@ async def verify_continuity(
 ):
     """
     Verify continuity using counter-based approach.
-    ✅ Stores each check in the database for tracking.
-    ✅ Flaw #9: detects heartbeat gaps (client silent for > 2 * interval).
+    Stores each heartbeat + emits V2 verification_event.
+    Flaw #9: detects heartbeat gaps (client silent for > 2 * interval).
     """
     logger.info(f"🔍 Continuity check for session: {request.session_id}")
 
@@ -316,12 +399,6 @@ async def verify_continuity(
     # ============================================================
     # Flaw #9: heartbeat gap detection
     # ============================================================
-    # Compute the gap between the previous check and this one. If it
-    # exceeds 2x the expected interval, we have a silent window that
-    # the client is not explaining. We still accept the hash (don't
-    # lock the user out) but we record an Anomaly so the gap is visible
-    # to admins and to the History timeline.
-    # ============================================================
     now_ts = request.timestamp
     expected_interval = session.check_interval_seconds or 60
     max_gap = expected_interval * 2
@@ -331,13 +408,11 @@ async def verify_continuity(
     gap_severity = None
 
     if session.last_hash_check is not None:
-        last_ts = int(session.last_hash_check.timestamp())
+        last_ts = _naive_utc_to_epoch(session.last_hash_check)
         gap_seconds = now_ts - last_ts
 
         if gap_seconds > max_gap:
             gap_detected = True
-            # MEDIUM for a moderate gap (2x - 10x interval),
-            # HIGH for a long gap (10x+ interval — session was effectively suspended).
             if gap_seconds > expected_interval * 10:
                 gap_severity = "HIGH"
             else:
@@ -349,7 +424,7 @@ async def verify_continuity(
                 f"max tolerance {max_gap}s, severity={gap_severity})"
             )
 
-    # 4. ✅ Store continuity check in database
+    # 4. ✅ Store heartbeat in database (V2 columns)
     status = "verified" if is_valid else "failed"
     if not is_valid:
         message = "Hash chain verification failed"
@@ -364,14 +439,27 @@ async def verify_continuity(
 
     check = ContinuityCheck(
         session_id=session.id,
-        check_time=datetime.fromtimestamp(request.timestamp),
-        check_number=next_counter,
-        hash_link=request.hash_link,
-        hash_link_valid=is_valid,
+        client_reported_at=datetime.fromtimestamp(request.timestamp, tz=timezone.utc).replace(tzinfo=None),
+        server_received_at=_utc_naive(),
+        sequence_num=next_counter,
+        hash=request.hash_link,
+        valid=is_valid,
         status=status,
-        message=message
+        message=message,
+        backfilled=False,
     )
     db.add(check)
+    db.flush()  # get check.id for event
+
+    if settings.V2_WRITE_EVENTS:
+        db.add(VerificationEvent(
+            session_id=session.id,
+            layer=VerificationLayer.chain,
+            event_type=VerificationEventType.success if is_valid else VerificationEventType.failure,
+            occurred_at=datetime.now(timezone.utc),
+            source_table="heartbeats",
+            source_id=check.id,
+        ))
 
     if not is_valid:
         logger.warning(f"❌ Hash verification failed for session {request.session_id}")
@@ -400,6 +488,7 @@ async def verify_continuity(
                 f"Counter moved {session.hash_counter} -> {next_counter}."
             ),
             resolved=False,
+            status="open",  # V2 field
         )
         db.add(gap_anomaly)
         logger.warning(
@@ -409,7 +498,7 @@ async def verify_continuity(
 
     # 6. Update session
     session.hash_counter = next_counter
-    session.last_hash_check = datetime.fromtimestamp(request.timestamp)
+    session.last_hash_check = datetime.fromtimestamp(request.timestamp, tz=timezone.utc).replace(tzinfo=None)
     db.commit()
 
     logger.info(f"✅ Continuity check passed for session {request.session_id}")
@@ -425,6 +514,7 @@ async def verify_continuity(
         current_index=session.hash_counter
     )
 
+
 # ==================== Get Continuity Checks ====================
 
 @router.get("/session/checks/{session_id}")
@@ -432,23 +522,18 @@ async def get_continuity_checks(
     session_id: str,
     db: DBSession = Depends(get_db)
 ):
-    """
-    ✅ NEW: Get all continuity checks for a session.
-    Used for the tracking timeline.
-    """
-    # Get session
+    """Get all heartbeats for a session (V2: uses sequence_num, backfilled)."""
     session = db.query(Session).filter(
         Session.session_id == session_id
     ).first()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Get all checks for this session
+
     checks = db.query(ContinuityCheck).filter(
         ContinuityCheck.session_id == session.id
-    ).order_by(ContinuityCheck.check_number.asc()).all()
-    
+    ).order_by(ContinuityCheck.sequence_num.asc()).all()
+
     return {
         "session_id": session_id,
         "entry_time": session.entry_time,
@@ -457,12 +542,14 @@ async def get_continuity_checks(
         "checks": [
             {
                 "id": c.id,
-                "check_number": c.check_number,
-                "check_time": c.check_time,
+                "sequence_num": c.sequence_num,
+                "client_reported_at": c.client_reported_at,
+                "server_received_at": c.server_received_at,
                 "status": c.status,
-                "hash_link": c.hash_link,
-                "hash_link_valid": c.hash_link_valid,
-                "message": c.message
+                "hash": c.hash,
+                "valid": c.valid,
+                "message": c.message,
+                "backfilled": c.backfilled,
             }
             for c in checks
         ],
@@ -477,40 +564,35 @@ async def start_exit(
     request: GPSVerificationRequest,
     db: DBSession = Depends(get_db)
 ):
-    """
-    Step 1: Student sends GPS for exit verification.
-    Generates exit QR automatically.
-    """
+    """Step 1: Student sends GPS for exit verification."""
     logger.info(f"📍 Start exit for student: {request.student_id}")
-    logger.info(f"📍 GPS received: lat={request.latitude}, lng={request.longitude}")
-    
+
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     session = db.query(Session).filter(
         Session.student_id == student.id,
         Session.status == "active"
     ).first()
-    
+
     if not session:
         return {
             "verified": False,
             "message": "No active session found. Please check in first.",
             "qr_data": None
         }
-    
+
     company = db.query(Company).filter(Company.id == session.company_id).first()
-    
-    # Check GPS (optional, with warning)
+
     if company:
         distance = calculate_distance(
             request.latitude, request.longitude,
             company.geofence_center_lat, company.geofence_center_lng
         )
-        
+
         is_within = distance <= company.geofence_radius
-        
+
         if not is_within:
             logger.info(f"⚠️ Student is {distance:.2f}km away from company, but exit is still allowed")
             return {
@@ -518,17 +600,16 @@ async def start_exit(
                 "message": f"You are {distance:.2f}km away from the company. Exit will still be recorded.",
                 "qr_data": None
             }
-    
-    # Generate exit QR using singleton
+
     qr_service = get_qr_service()
     challenge = qr_service.generate_challenge(
         student_id=request.student_id,
         company_id=session.company_id,
         purpose="exit"
     )
-    
+
     logger.info(f"✅ Exit QR generated for {request.student_id}: {challenge.token[:8]}...")
-    
+
     return {
         "verified": True,
         "message": "Exit QR generated automatically.",
@@ -552,10 +633,10 @@ async def complete_exit(
 ):
     """
     Step 2: Student completes exit with auto-detected QR.
-    Phase 2B: Verifies exit hash.
+    V2: canonicalizes status to closed/flagged, emits exit-chain event.
     """
     logger.info(f"✅ Complete exit for student: {request.student_id}")
-    
+
     # 1. Verify QR
     qr_service = get_qr_service()
     result = qr_service.verify_challenge(
@@ -564,24 +645,24 @@ async def complete_exit(
         company_id=request.company_id,
         purpose="exit"
     )
-    
+
     if not result.valid:
         raise HTTPException(status_code=400, detail=result.message)
-    
+
     # 2. Get student
     student = db.query(Student).filter(Student.student_id == request.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     # 3. Get active session
     session = db.query(Session).filter(
         Session.student_id == student.id,
         Session.status == "active"
     ).first()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="No active session found")
-    
+
     # 4. ✅ Verify exit hash
     chain_verified = False
     if request.hash_chain_link and session.hash_chain_seed:
@@ -591,25 +672,47 @@ async def complete_exit(
             seed=session.hash_chain_seed,
             provided_hash=request.hash_chain_link
         )
-        
+
         if is_valid:
             chain_verified = True
             logger.info(f"✅ Exit hash verified for session {session.session_id}")
         else:
             logger.warning(f"❌ Exit hash verification failed")
-    
-    # 5. Close session
+
+    # 5. Close session (V2: canonical statuses)
     exit_timestamp = int(time.time())
-    duration_seconds = exit_timestamp - int(session.entry_time.timestamp())
-    
-    session.exit_time = datetime.fromtimestamp(exit_timestamp)
-    session.status = "completed" if chain_verified else "completed_with_anomaly"
+    duration_seconds = exit_timestamp - _naive_utc_to_epoch(session.entry_time)
+
+    session.exit_time = datetime.fromtimestamp(exit_timestamp, tz=timezone.utc).replace(tzinfo=None)
+    session.status = "closed" if chain_verified else "flagged"
     session.total_duration_seconds = duration_seconds
-    
+    session.chain_verified = chain_verified
+
     db.commit()
-    
-    logger.info(f"✅ Session closed: {session.session_id}, Duration: {duration_seconds}s")
-    
+
+    logger.info(f"✅ Session closed: {session.session_id}, Duration: {duration_seconds}s, Status: {session.status}")
+
+    # 6. V2: emit exit-chain event
+    if settings.V2_WRITE_EVENTS:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            last_hb = db.query(ContinuityCheck).filter(
+                ContinuityCheck.session_id == session.id
+            ).order_by(ContinuityCheck.sequence_num.desc()).first()
+            if last_hb:
+                db.add(VerificationEvent(
+                    session_id=session.id,
+                    layer=VerificationLayer.chain,
+                    event_type=VerificationEventType.success if chain_verified else VerificationEventType.failure,
+                    occurred_at=now_utc,
+                    source_table="heartbeats",
+                    source_id=last_hb.id,
+                ))
+                db.commit()
+        except Exception as e:
+            logger.error(f"⚠️ V2 exit event write failed: {e}")
+            db.rollback()
+
     return {
         "session_id": session.session_id,
         "duration_seconds": duration_seconds,
@@ -628,27 +731,27 @@ async def get_student_dashboard(
 ):
     """Get student dashboard data"""
     logger.info(f"📊 Dashboard requested for: {student_id}")
-    
+
     student = db.query(Student).filter(Student.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     assignment = db.query(InternshipAssignment).join(Internship).filter(
         InternshipAssignment.student_id == student.id,
         InternshipAssignment.is_active == True
     ).first()
-    
+
     active_internship = None
     if assignment:
         internship = db.query(Internship).filter(Internship.id == assignment.internship_id).first()
         company = db.query(Company).filter(Company.id == internship.company_id).first()
-        
+
         if internship:
             session = db.query(Session).filter(
                 Session.student_id == student.id,
                 Session.status == "active"
             ).first()
-            
+
             active_internship = {
                 "internship_id": internship.id,
                 "company_name": company.name if company else "Unknown",
@@ -660,7 +763,7 @@ async def get_student_dashboard(
                 "can_start": not session,
                 "status_message": "Active session in progress" if session else "Ready to check in"
             }
-    
+
     return {
         "student": {
             "student_id": student.student_id,
@@ -682,21 +785,21 @@ async def get_active_session(
     student = db.query(Student).filter(Student.student_id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    
+
     session = db.query(Session).filter(
         Session.student_id == student.id,
         Session.status == "active"
     ).first()
-    
+
     if not session:
         return {"active": False, "session": None}
-    
+
     return {
         "active": True,
         "session": {
             "session_id": session.session_id,
             "entry_time": session.entry_time,
-            "duration_minutes": int((time.time() - session.entry_time.timestamp()) / 60),
+            "duration_minutes": int((time.time() - _naive_utc_to_epoch(session.entry_time)) / 60),
             "hash_counter": session.hash_counter or 0
         }
     }
@@ -705,6 +808,7 @@ async def get_active_session(
 # ==================== Environment Commitment (Phase 2C) ====================
 
 from pydantic import BaseModel
+
 
 class EnvironmentCommitmentRequest(BaseModel):
     session_id: str
@@ -734,29 +838,26 @@ async def store_environment(
     request: dict,
     db: DBSession = Depends(get_db)
 ):
-    """
-    Store environment commitment.
-    This is a simple storage — no validation yet.
-    """
+    """Store environment commitment."""
     session_id = request.get("session_id")
     commitment = request.get("commitment")
-    
+
     if not session_id or not commitment:
         return {"stored": False, "message": "Missing session_id or commitment"}
-    
+
     session = db.query(Session).filter(
         Session.session_id == session_id,
         Session.status == "active"
     ).first()
-    
+
     if not session:
         return {"stored": False, "message": "Active session not found"}
-    
+
     session.environment_commitment = commitment
     db.commit()
-    
+
     logger.info(f"✅ Environment commitment stored for session {session_id}")
-    
+
     return {"stored": True, "message": "Environment commitment stored successfully."}
 
 
@@ -765,29 +866,24 @@ async def verify_environment(
     request: dict,
     db: DBSession = Depends(get_db)
 ):
-    """
-    Verify environment — always returns True for now.
-    Will implement proper threshold matching later.
-    """
+    """Verify environment — always returns True for now."""
     session_id = request.get("session_id")
     current_commitment = request.get("current_commitment")
-    
+
     if not session_id:
         return {"verified": False, "overlap": 0.0, "message": "Missing session_id"}
-    
+
     session = db.query(Session).filter(
         Session.session_id == session_id,
         Session.status == "active"
     ).first()
-    
+
     if not session:
         return {"verified": False, "overlap": 0.0, "message": "Active session not found"}
-    
+
     if not session.environment_commitment:
         return {"verified": True, "overlap": 1.0, "message": "No reference environment — skipping check"}
-    
-    # For now, always return true with low overlap
-    # This ensures exit is never blocked by environment mismatch
+
     return {
         "verified": True,
         "overlap": 0.8,

@@ -3,7 +3,7 @@
 Student schemas
 """
 from pydantic import BaseModel, EmailStr
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 # ---------- Student CRUD ----------
@@ -67,6 +67,11 @@ class StudentEntryRequest(BaseModel):
     # True  = liveness passed
     # False = 3 attempts failed; session is still created per "don't lock out" rule
     face_verified: Optional[bool] = None
+    # ---- V2 additions (optional; ignored by mobile until Phase 1c) ----
+    # Mobile can echo the ZKP result from start-entry to enrich the V2 row.
+    zkp_public_signals: Optional[List[str]] = None
+    zkp_actual_distance: Optional[float] = None
+    zkp_radius: Optional[float] = None
 
 
 class StudentEntryResponse(BaseModel):
@@ -89,6 +94,7 @@ class ContinuityCheckResponse(BaseModel):
     message: str
     next_check_seconds: int
     current_index: int
+
 
 # ==================== Environment Commitment ====================
 

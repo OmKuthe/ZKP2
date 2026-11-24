@@ -1,9 +1,10 @@
 // frontend-web/src/components/ManagerLayout.jsx
 import React, { useEffect } from 'react';
-import { Link, useNavigate, Outlet } from 'react-router-dom';
+import { Link, useNavigate, Outlet, useLocation } from 'react-router-dom';
 
 const ManagerLayout = () => {
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -18,30 +19,40 @@ const ManagerLayout = () => {
     navigate('/manager/login');
   };
 
+  const navLink = (to, label) => {
+    const active =
+      location.pathname === to ||
+      (to !== '/manager' && location.pathname.startsWith(to));
+    const base = 'text-sm hover:text-primary-500';
+    const cls = active ? 'text-primary-500 font-semibold' : 'text-slate-600';
+    return (
+      <Link to={to} className={`${base} ${cls}`}>
+        {label}
+      </Link>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       <nav className="bg-white shadow-sm border-b sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center gap-6">
-              <span className="text-xl font-bold text-primary-600">ZKAttend</span>
+              <span className="text-xl font-bold text-primary-500">ZKAttend</span>
               <span className="text-sm text-slate-500">Manager Portal</span>
-              
-              {/* Navigation Links */}
+
               <div className="flex items-center gap-4 ml-4">
-                <Link to="/manager" className="text-sm text-slate-600 hover:text-primary-600">
-                  Dashboard
-                </Link>
-                <Link to="/manager/students" className="text-sm text-slate-600 hover:text-primary-600">
-                  Students
-                </Link>
+                {navLink('/manager', 'Dashboard')}
+                {navLink('/manager/students', 'Students')}
+                {navLink('/manager/flagged', 'Flagged')}
+                {navLink('/manager/analytics', 'Analytics')}
               </div>
             </div>
             <div className="flex items-center space-x-4">
               <span className="text-sm text-slate-700">Welcome, Admin</span>
               <button
                 onClick={handleLogout}
-                className="inline-flex items-center px-3 py-1 text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700"
+                className="inline-flex items-center px-3 py-1 text-sm font-medium rounded-md text-white bg-danger-500 hover:bg-danger-600"
               >
                 Logout
               </button>

@@ -1,0 +1,4 @@
+student_id,name,email,company_id
+BULKTEST01,Bulk Test One,bulktest01@example.com,
+BULKTEST02,Bulk Test Two,bulktest02@example.com,
+S001,Duplicate Student,existing@test.com,

@@ -1,0 +1,16 @@
+﻿import sqlite3
+db = sqlite3.connect("v2.db")
+c = db.cursor()
+rows = c.execute("SELECT id FROM sessions WHERE session_id LIKE 'session_test_%'").fetchall()
+print(f"Deleting {len(rows)} test session(s)")
+for (sid,) in rows:
+    c.execute("DELETE FROM verification_events WHERE session_id = ?", (sid,))
+    c.execute("DELETE FROM heartbeats WHERE session_id = ?", (sid,))
+    c.execute("DELETE FROM presence_challenges WHERE session_id = ?", (sid,))
+    c.execute("DELETE FROM anomalies WHERE session_id = ?", (sid,))
+    c.execute("DELETE FROM wifi_verifications WHERE session_id = ?", (sid,))
+    c.execute("DELETE FROM wifi_templates WHERE session_id = ?", (sid,))
+    c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+db.commit()
+db.close()
+print("✅ Cleanup done")
