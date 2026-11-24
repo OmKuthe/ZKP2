@@ -2,8 +2,8 @@
 """
 V2 presence challenge endpoints.
 
-GET  /v2/challenges/pending?student_id=...   (mobile polls this each cycle)
-POST /v2/challenges/{id}/respond             (mobile reports face-check result)
+POST /v2/challenges/{id}/respond   — mobile reports outcome
+GET  /v2/challenges/pending        — mobile polls for a live challenge
 """
 from __future__ import annotations
 
@@ -33,55 +33,13 @@ class ChallengeRespondResponse(BaseModel):
     message: str
 
 
-def _iso_utc(dt: datetime) -> str:
-    """ISO-8601 string with an explicit UTC offset.
-
-    Without the offset, JavaScript parses the value as device-local time
-    and the countdown shifts by the device's UTC offset.
-    """
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat()
-
-
-@router.get("/pending")
-async def get_pending_challenge(
-    student_id: str = Query(...),
-    db: DBSession = Depends(get_db),
-):
-    """
-    Return the student's most recent unexpired, unanswered challenge, if any.
-    """
-    if not settings.V2_CHALLENGES_ENABLED:
-        return {"pending": False, "challenge": None}
-
-    student = db.query(Student).filter(Student.student_id == student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail=f"Student '{student_id}' not found")
-
-    # Naive UTC, matching how timestamps are stored elsewhere.
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-
-    challenge = (
-        db.query(PresenceChallenge)
-        .join(Session, PresenceChallenge.session_id == Session.id)
-        .filter(Session.student_id == student.id)
-        .filter(PresenceChallenge.status == ChallengeStatus.PENDING)
-        .filter(PresenceChallenge.expires_at > now_utc)
-        .order_by(PresenceChallenge.id.desc())
-        .first()
-    )
-
-    if not challenge:
-        return {"pending": False, "challenge": None}
-
-    return {
-        "pending": True,
-        "challenge": {
-            "id": challenge.id,
-            "expires_at": _iso_utc(challenge.expires_at),
-        },
-    }
+class PendingChallengeResponse(BaseModel):
+    pending: bool
+    challenge_id: Optional[int] = None
+    session_id: Optional[str] = None
+    issued_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    reason: Optional[str] = None
 
 
 @router.post("/{challenge_id}/respond", response_model=ChallengeRespondResponse)
@@ -90,10 +48,7 @@ async def respond(
     request: ChallengeRespondRequest,
     db: DBSession = Depends(get_db),
 ):
-    """
-    Mobile reports the outcome of a re-verify. On failure, the session
-    is flagged and a `reverify_timeout` anomaly is created.
-    """
+    """Mobile reports the outcome of a re-verify."""
     if not settings.V2_CHALLENGES_ENABLED:
         raise HTTPException(status_code=503, detail="Challenges are disabled")
 
@@ -112,4 +67,55 @@ async def respond(
         challenge_id=challenge.id,
         status=challenge.status.value,
         message=message,
+    )
+
+
+@router.get("/pending", response_model=PendingChallengeResponse)
+async def get_pending_challenge(
+    student_id: str = Query(..., description="V1 student string id, e.g. S001"),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Return the student's current pending challenge, if any.
+
+    Mobile polls this every heartbeat cycle (~60s). If a pending challenge
+    exists (status='pending' and expires_at > now), it's returned with
+    enough data to open the modal. If none, returns {pending: false}.
+
+    Only one pending challenge per session is allowed (enforced by issue_challenge).
+    """
+    if not settings.V2_CHALLENGES_ENABLED:
+        return PendingChallengeResponse(pending=False)
+
+    student = db.query(Student).filter(Student.student_id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail=f"Student '{student_id}' not found")
+
+    # Find the student's most recent pending challenge on an active session
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    row = (
+        db.query(PresenceChallenge, Session)
+        .join(Session, Session.id == PresenceChallenge.session_id)
+        .filter(
+            Session.student_id == student.id,
+            Session.status == "active",
+            PresenceChallenge.status == ChallengeStatus.pending,
+            PresenceChallenge.expires_at > now_naive,
+        )
+        .order_by(PresenceChallenge.id.desc())
+        .first()
+    )
+
+    if not row:
+        return PendingChallengeResponse(pending=False)
+
+    challenge, session = row
+    return PendingChallengeResponse(
+        pending=True,
+        challenge_id=challenge.id,
+        session_id=session.session_id,
+        issued_at=challenge.issued_at,
+        expires_at=challenge.expires_at,
+        reason="wifi_fail_escalation",
     )

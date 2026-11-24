@@ -1,6 +1,9 @@
 // zkattend-mobile/app/api/client.ts
 import axios from 'axios';
 
+// Path A: local testing. Revert to 'https://zkp2.onrender.com/api' for prod.
+// 10.0.2.2 = Android emulator's alias for host machine's 127.0.0.1
+// Physical device: use your PC's LAN IP, e.g. http://192.168.1.42:8001/api
 export const API_URL = 'https://zkp2.onrender.com/api';
 
 const api = axios.create({
@@ -9,7 +12,6 @@ const api = axios.create({
   timeout: 90000,
 });
 
-// Add logging
 api.interceptors.request.use((config) => {
   console.log(`📡 ${config.method?.toUpperCase()} ${config.url}`);
   return config;
@@ -31,11 +33,9 @@ api.interceptors.response.use(
 // ==================== Student API ====================
 
 export const studentAPI = {
-  // Get dashboard
   getDashboard: (studentId: string) =>
     api.get(`/student/dashboard?student_id=${studentId}`),
 
-  // Start entry with GPS
   startEntry: (studentId: string, latitude: number, longitude: number) =>
     api.post('/student/start-entry', {
       student_id: studentId,
@@ -43,7 +43,6 @@ export const studentAPI = {
       longitude,
     }),
 
-  // Complete entry with QR + face liveness result
   completeEntry: (
     studentId: string,
     companyId: number,
@@ -57,7 +56,6 @@ export const studentAPI = {
       face_verified: faceVerified ?? null,
     }),
 
-  // Start exit with GPS
   startExit: (studentId: string, latitude: number, longitude: number) =>
     api.post('/student/start-exit', {
       student_id: studentId,
@@ -65,7 +63,6 @@ export const studentAPI = {
       longitude,
     }),
 
-  // Complete exit with QR + hash chain link
   completeExit: (
     studentId: string,
     companyId: number,
@@ -79,11 +76,9 @@ export const studentAPI = {
       hash_chain_link: hashLink,
     }),
 
-  // Get active session
   getActiveSession: (studentId: string) =>
     api.get(`/student/active-session/${studentId}`),
 
-  // Verify continuity with counter-based hash
   verifyContinuity: (sessionId: string, hashLink: string) =>
     api.post('/student/verify-continuity', {
       session_id: sessionId,
@@ -91,7 +86,6 @@ export const studentAPI = {
       timestamp: Math.floor(Date.now() / 1000),
     }),
 
-  // Legacy: store environment commitment
   storeEnvironment: (sessionId: string, commitment: string) =>
     api.post('/student/store-environment', {
       session_id: sessionId,
@@ -99,7 +93,6 @@ export const studentAPI = {
       timestamp: Math.floor(Date.now() / 1000),
     }),
 
-  // Legacy: verify environment
   verifyEnvironment: (sessionId: string, commitment: string) =>
     api.post('/student/verify-environment', {
       session_id: sessionId,
@@ -107,15 +100,10 @@ export const studentAPI = {
       timestamp: Math.floor(Date.now() / 1000),
     }),
 
-  // Get continuity checks for tracking timeline
   getContinuityChecks: (sessionId: string) =>
     api.get(`/student/session/checks/${sessionId}`),
 
-  // ✅ Get past session history (used by HistoryScreen).
-  // Route lives in qr.py without a router prefix, so the path is
-  // /api/history/{id}, not /api/student/history/{id}.
-  getHistory: (studentId: string) =>
-    api.get(`/history/${studentId}`),
+  getHistory: (studentId: string) => api.get(`/history/${studentId}`),
 
   // ============================================================
   // Wi-Fi Fingerprinting API
@@ -156,6 +144,76 @@ export const studentAPI = {
 
   getWifiVerifications: (sessionId: string) =>
     api.get(`/wifi/verifications/${sessionId}`),
+
+  // ============================================================
+  // V2: Presence challenges (Phase 4b)
+  // ============================================================
+
+  /**
+   * Poll for a pending re-verify challenge. Called once per heartbeat cycle.
+   * Returns { pending: false } if there's nothing to do.
+   */
+  getPendingChallenge: (studentId: string) =>
+    api.get(`/v2/challenges/pending?student_id=${studentId}`),
+
+  /**
+   * Report the outcome of a re-verify.
+   * @param passed  true = student verified, false = student failed
+   * @param note    optional human note (e.g. "blink detection failed")
+   */
+  respondToChallenge: (
+    challengeId: number,
+    passed: boolean,
+    note?: string
+  ) =>
+    api.post(`/v2/challenges/${challengeId}/respond`, {
+      passed,
+      note: note ?? null,
+    }),
+
+    // Append to studentAPI object (inside the existing studentAPI = { ... }):
+
+  // ============================================================
+  // V2: Read endpoints (Phase 5 — History / Calendar screens)
+  // ============================================================
+
+  /**
+   * Fetch a student's session history.
+   * @param params.limit  default 20
+   * @param params.page   default 1
+   * @param params.from   optional YYYY-MM-DD (inclusive)
+   * @param params.to     optional YYYY-MM-DD (inclusive)
+   * @param params.status optional 'active' | 'closed' | 'flagged' | 'abandoned'
+   */
+  sessions: (
+    studentId: string,
+    params?: {
+      limit?: number;
+      page?: number;
+      from?: string;
+      to?: string;
+      status?: string;
+    }
+  ) => {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.append('limit', String(params.limit));
+    if (params?.page) qs.append('page', String(params.page));
+    if (params?.from) qs.append('from', params.from);
+    if (params?.to) qs.append('to', params.to);
+    if (params?.status) qs.append('status', params.status);
+    const query = qs.toString();
+    return api.get(
+      `/v2/students/${studentId}/sessions${query ? `?${query}` : ''}`
+    );
+  },
+
+  /**
+   * Fetch a student's per-day calendar for a month.
+   * @param month  'YYYY-MM'
+   */
+  calendar: (studentId: string, month: string) =>
+    api.get(`/v2/students/${studentId}/calendar?month=${month}`),
+
 };
 
 export default api;

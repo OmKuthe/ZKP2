@@ -38,6 +38,7 @@ import {
   setWifiEnabled,
   type ContinuityResult,
   type WifiResult,
+  PendingChallengeInfo,
 } from '../services/verificationLoop';
 import {
   startForegroundVerification,
@@ -63,6 +64,7 @@ import RecentActivity, {
 import LayerDetailModal, {
   VerificationLayer,
 } from '../components/dashboard/LayerDetailModal';
+import { challengeBus } from '@/utils/challengeBus';
 
 // Composite: DashboardScreen lives inside BottomTab, but can also push
 // onto the root stack (FaceVerify). This type reflects both.
@@ -400,12 +402,16 @@ const DashboardScreen = ({ navigation, route }: DashboardScreenProps) => {
     console.log(`🔔 Foreground service stopped (${reason})`);
   }
 
-  function buildLoopListeners() {
-    return {
-      onContinuityResult: handleContinuityResult,
-      onWifiResult: handleWifiResult,
-    };
-  }
+ function buildLoopListeners() {
+  return {
+    onContinuityResult: handleContinuityResult,
+    onWifiResult: handleWifiResult,
+    onChallengePending: (challenge: PendingChallengeInfo) => {
+      console.log(`🎯 Dashboard: challenge #${challenge.challengeId} pending`);
+      challengeBus.emit(challenge);
+    },
+  };
+}
 
   useEffect(() => {
     if (!session || !isChainGenerated) return;

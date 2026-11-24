@@ -8,6 +8,7 @@
  */
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
 
 import DashboardScreen from '../screens/DashboardScreen';
 import HistoryScreen from '../screens/HistoryScreen';
@@ -17,10 +18,27 @@ import { MainTabParamList } from '../types/navigation';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+type IoniconName = keyof typeof Ionicons.glyphMap;
+
+const iconFor = (routeName: keyof MainTabParamList, focused: boolean): IoniconName => {
+  switch (routeName) {
+    case 'Home':
+      return focused ? 'home' : 'home-outline';
+    case 'History':
+      return focused ? 'time' : 'time-outline';
+    case 'Calendar':
+      return focused ? 'calendar' : 'calendar-outline';
+    case 'Profile':
+      return focused ? 'person' : 'person-outline';
+    default:
+      return 'ellipse-outline';
+  }
+};
+
 const MainTabs = () => {
   return (
     <Tab.Navigator
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerShown: false,
         tabBarActiveTintColor: '#4F46E5',
         tabBarInactiveTintColor: '#94a3b8',
@@ -35,7 +53,14 @@ const MainTabs = () => {
           fontSize: 11,
           fontWeight: '600',
         },
-      }}
+        tabBarIcon: ({ focused, color, size }) => (
+          <Ionicons
+            name={iconFor(route.name, focused)}
+            size={size}
+            color={color}
+          />
+        ),
+      })}
     >
       <Tab.Screen
         name="Home"

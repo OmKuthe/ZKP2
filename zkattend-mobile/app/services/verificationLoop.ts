@@ -1,13 +1,8 @@
 // zkattend-mobile/app/services/verificationLoop.ts
 /**
  * Headless verification loop.
- *
- * One call = one full cycle (continuity + Wi-Fi).
+ * One call = one full cycle (continuity + Wi-Fi + challenge check).
  * The loop does NOT schedule itself — the caller owns the timer.
- *
- * Wi-Fi is gated by a mutable flag (_wifiEnabled), NOT by the startLoop
- * config. This is deliberate: enrollment happens asynchronously after
- * startLoop is called, and a frozen boolean would lock Wi-Fi off forever.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -40,11 +35,27 @@ export interface WifiResult {
   error?: string;
 }
 
+export interface PendingChallengeInfo {
+  challengeId: number;
+  sessionId: string;
+  issuedAt: string;
+  expiresAt: string;
+  reason?: string;
+}
+
+export interface ChallengeResult {
+  checked: boolean;
+  pending: boolean;
+  challenge?: PendingChallengeInfo;
+  error?: string;
+}
+
 export interface CycleResult {
   reason: CycleReason;
   timestamp: number;
   continuity: ContinuityResult;
   wifi: WifiResult;
+  challenge: ChallengeResult;
 }
 
 export interface LoopConfig {
@@ -56,11 +67,12 @@ export interface LoopConfig {
 export interface LoopListeners {
   onContinuityResult?: (result: ContinuityResult) => void;
   onWifiResult?: (result: WifiResult) => void;
+  onChallengePending?: (challenge: PendingChallengeInfo) => void;
   onCycleComplete?: (result: CycleResult) => void;
 }
 
 // ============================================================
-// Internal state (module-level singleton)
+// Internal state
 // ============================================================
 
 interface StoredChainData {
@@ -74,7 +86,7 @@ let _config: LoopConfig | null = null;
 let _listeners: LoopListeners = {};
 let _counter = 0;
 let _running = false;
-let _wifiEnabled = false; // mutable, toggled by setWifiEnabled()
+let _wifiEnabled = false;
 
 // ============================================================
 // Storage helpers
@@ -89,7 +101,6 @@ async function persistCounter(sessionId: string, counter: number): Promise<void>
     const key = chainKey(sessionId);
     const existing = await AsyncStorage.getItem(key);
     let data: StoredChainData | null = existing ? JSON.parse(existing) : null;
-
     if (data) {
       data.counter = counter;
     } else if (_config) {
@@ -102,7 +113,6 @@ async function persistCounter(sessionId: string, counter: number): Promise<void>
     } else {
       return;
     }
-
     await AsyncStorage.setItem(key, JSON.stringify(data));
   } catch (err) {
     console.error('❌ [verificationLoop] Failed to persist counter:', err);
@@ -118,7 +128,6 @@ export function startLoop(config: LoopConfig, listeners: LoopListeners = {}): vo
   _listeners = listeners;
   _counter = 0;
   _running = false;
-  // wifi starts disabled; caller MUST call setWifiEnabled(true) after enrollment
   _wifiEnabled = false;
   console.log(
     `🔁 [verificationLoop] Started (session=${config.sessionId}, wifi=${_wifiEnabled})`
@@ -134,11 +143,9 @@ export function restoreLoop(
   _listeners = listeners;
   _counter = restoredCounter;
   _running = false;
-  // On restore, assume Wi-Fi was enabled if a template exists.
-  // Caller can override with setWifiEnabled() after checking template info.
   _wifiEnabled = true;
   console.log(
-    `🔁 [verificationLoop] Restored (session=${config.sessionId}, counter=${restoredCounter}, wifi=${_wifiEnabled})`
+    `🔁 [verificationLoop] Restored (session=${config.sessionId}, counter=${restoredCounter})`
   );
 }
 
@@ -165,7 +172,7 @@ export function setWifiEnabled(enabled: boolean): void {
 }
 
 // ============================================================
-// Continuity check
+// Continuity check (unchanged)
 // ============================================================
 
 async function runContinuity(): Promise<ContinuityResult> {
@@ -196,7 +203,7 @@ async function runContinuity(): Promise<ContinuityResult> {
         attempted: true,
         verified: true,
         counter: nextCounter,
-        message: `✅ Continuity #${nextCounter} verified (server counter: ${data.current_index})`,
+        message: `✅ Continuity #${nextCounter} verified`,
       };
       _listeners.onContinuityResult?.(result);
       return result;
@@ -224,7 +231,7 @@ async function runContinuity(): Promise<ContinuityResult> {
 }
 
 // ============================================================
-// Wi-Fi check
+// Wi-Fi check (unchanged)
 // ============================================================
 
 async function runWifi(): Promise<WifiResult> {
@@ -269,9 +276,7 @@ async function runWifi(): Promise<WifiResult> {
       anomaly: data.is_anomaly,
       message: data.verified
         ? `📶 Wi-Fi verified (score ${data.similarity_score.toFixed(2)})`
-        : `📶 Wi-Fi anomaly (score ${data.similarity_score.toFixed(2)})${
-            data.anomaly_id ? ` — flagged #${data.anomaly_id}` : ''
-          }`,
+        : `📶 Wi-Fi anomaly (score ${data.similarity_score.toFixed(2)})`,
       anomalyId: data.anomaly_id ?? null,
     };
     _listeners.onWifiResult?.(result);
@@ -291,31 +296,78 @@ async function runWifi(): Promise<WifiResult> {
 }
 
 // ============================================================
+// Challenge check (NEW)
+// ============================================================
+
+async function runChallengeCheck(): Promise<ChallengeResult> {
+  if (!_config) {
+    return { checked: false, pending: false, error: 'not_started' };
+  }
+
+  try {
+    const response = await studentAPI.getPendingChallenge(_config.studentId);
+    const data = response.data as {
+      pending: boolean;
+      challenge_id?: number;
+      session_id?: string;
+      issued_at?: string;
+      expires_at?: string;
+      reason?: string;
+    };
+
+    if (!data.pending || !data.challenge_id) {
+      return { checked: true, pending: false };
+    }
+
+    const challenge: PendingChallengeInfo = {
+      challengeId: data.challenge_id,
+      sessionId: data.session_id || _config.sessionId,
+      issuedAt: data.issued_at || new Date().toISOString(),
+      expiresAt: data.expires_at || new Date(Date.now() + 5 * 60_000).toISOString(),
+      reason: data.reason,
+    };
+
+    console.log(
+      `🎯 [verificationLoop] Pending challenge #${challenge.challengeId} (expires ${challenge.expiresAt})`
+    );
+    _listeners.onChallengePending?.(challenge);
+
+    return { checked: true, pending: true, challenge };
+  } catch (err: any) {
+    // A network error here is not fatal — just skip and retry next cycle
+    console.log(
+      `⚠️ [verificationLoop] Challenge check failed: ${err?.message || err}`
+    );
+    return {
+      checked: true,
+      pending: false,
+      error: err?.message || String(err),
+    };
+  }
+}
+
+// ============================================================
 // One full cycle
 // ============================================================
 
-export async function runCycleOnce(reason: CycleReason = 'auto'): Promise<CycleResult> {
+export async function runCycleOnce(
+  reason: CycleReason = 'auto'
+): Promise<CycleResult> {
   const timestamp = Date.now();
 
   if (!_config) {
+    const noop = {
+      attempted: false,
+      verified: false,
+      message: 'Loop not started',
+      error: 'not_started',
+    };
     return {
       reason,
       timestamp,
-      continuity: {
-        attempted: false,
-        verified: false,
-        counter: 0,
-        message: 'Loop not started',
-        error: 'not_started',
-      },
-      wifi: {
-        attempted: false,
-        verified: false,
-        score: 0,
-        anomaly: false,
-        message: 'Loop not started',
-        error: 'not_started',
-      },
+      continuity: { ...noop, counter: 0 },
+      wifi: { ...noop, score: 0, anomaly: false },
+      challenge: { checked: false, pending: false, error: 'not_started' },
     };
   }
 
@@ -337,6 +389,7 @@ export async function runCycleOnce(reason: CycleReason = 'auto'): Promise<CycleR
         anomaly: false,
         message: 'Cycle already running',
       },
+      challenge: { checked: false, pending: false, error: 'already_running' },
     };
   }
 
@@ -344,10 +397,14 @@ export async function runCycleOnce(reason: CycleReason = 'auto'): Promise<CycleR
   console.log(`🔁 [verificationLoop] Cycle start (${reason})`);
 
   try {
-    const continuity = await runContinuity();
-    const wifi = await runWifi();
+    // Run all three in parallel — they're independent
+    const [continuity, wifi, challenge] = await Promise.all([
+      runContinuity(),
+      runWifi(),
+      runChallengeCheck(),
+    ]);
 
-    const result: CycleResult = { reason, timestamp, continuity, wifi };
+    const result: CycleResult = { reason, timestamp, continuity, wifi, challenge };
     _listeners.onCycleComplete?.(result);
     return result;
   } finally {

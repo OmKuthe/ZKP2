@@ -1,19 +1,4 @@
 // zkattend-mobile/app/screens/FaceVerifyScreen.tsx
-/**
- * Face liveness verification — Step 2, Path 2 (blink transition).
- *
- * Fixes applied:
- *   - CameraView has NO children (Android crash fix)
- *   - Overlay is a sibling View with absolute positioning
- *   - onCameraReady guard before takePictureAsync
- *   - isMountedRef guard to prevent setState after unmount
- *   - handleVerified wrapped in try/catch
- *
- * StudentContext migration (file #9 of 9):
- *   - No longer reads route.params.studentId (identity comes from context)
- *   - Returns to Home via navigate('MainTabs', { screen: 'Home', params: { faceVerified } })
- *   - `faceVerified` remains the one-shot signal consumed by DashboardScreen
- */
 import React, { useRef, useState, useEffect } from 'react';
 import {
   View,
@@ -25,7 +10,7 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import {
   FaceDetectionProvider,
   useFaceDetection,
@@ -33,11 +18,13 @@ import {
 } from '@infinitered/react-native-mlkit-face-detection';
 
 import { RootStackParamList } from '../types/navigation';
+import { studentAPI } from '../api/client';
 
 type FaceVerifyNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'FaceVerify'
 >;
+type FaceVerifyRouteProp = RouteProp<RootStackParamList, 'FaceVerify'>;
 
 const FACE_DETECTION_OPTIONS: RNMLKitFaceDetectorOptions = {
   performanceMode: 'fast',
@@ -86,7 +73,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
 
   const captureFrame = async (): Promise<FrameResult | null> => {
     if (!cameraRef.current || !cameraReady) return null;
-
     try {
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.5,
@@ -96,15 +82,12 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
       if (!photo?.uri) return null;
 
       const result: any = await detector.detectFaces(photo.uri);
-      const faces: any[] =
-        result?.faces ?? result?.result?.faces ?? [];
-
+      const faces: any[] = result?.faces ?? result?.result?.faces ?? [];
       if (!Array.isArray(faces) || faces.length !== 1) return null;
 
       const face = faces[0];
       const leftOpen = face.leftEyeOpenProbability;
       const rightOpen = face.rightEyeOpenProbability;
-
       if (typeof leftOpen !== 'number' || typeof rightOpen !== 'number') {
         return null;
       }
@@ -129,15 +112,11 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     setStatus('Watching for a blink… please blink naturally');
 
     const frames: FrameResult[] = [];
-
     for (let i = 0; i < FRAMES_PER_ATTEMPT; i++) {
       if (!isMountedRef.current) return;
-      setStatus(
-        `Capturing frame ${i + 1}/${FRAMES_PER_ATTEMPT} — blink naturally`
-      );
+      setStatus(`Capturing frame ${i + 1}/${FRAMES_PER_ATTEMPT}`);
       const frame = await captureFrame();
       if (frame) frames.push(frame);
-
       if (i < FRAMES_PER_ATTEMPT - 1) {
         await new Promise((r) => setTimeout(r, FRAME_INTERVAL_MS));
       }
@@ -145,32 +124,15 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
 
     if (!isMountedRef.current) return;
 
-    console.log(
-      '🧠 FaceVerify sequence:',
-      frames
-        .map(
-          (f) =>
-            `L=${f.leftOpen.toFixed(2)} R=${f.rightOpen.toFixed(2)}` +
-            (f.isClosed ? ' [CLOSED]' : f.isOpen ? ' [OPEN]' : '')
-        )
-        .join(' | ')
-    );
-
     let sawClosed = false;
     let transitionDetected = false;
-
     for (const frame of frames) {
-      if (frame.isClosed) {
-        sawClosed = true;
-      } else if (sawClosed && frame.isOpen) {
+      if (frame.isClosed) sawClosed = true;
+      else if (sawClosed && frame.isOpen) {
         transitionDetected = true;
         break;
       }
     }
-
-    console.log(
-      `🧠 FaceVerify: sawClosed=${sawClosed}, transition=${transitionDetected}`
-    );
 
     if (transitionDetected) {
       setStatus('✅ Blink detected — liveness confirmed');
@@ -186,7 +148,7 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     if (remaining <= 0) {
       Alert.alert(
         'Face Verification Failed',
-        'Could not detect a blink after 3 attempts. You can continue with check-in, but your session will be flagged for admin review.',
+        'Could not detect a blink after 3 attempts. Your session will be flagged for admin review.',
         [{ text: 'Continue', onPress: () => onVerified(false) }]
       );
       return;
@@ -195,9 +157,7 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     const reason = !sawClosed
       ? 'No blink detected — please blink clearly and try again'
       : 'Blink detected but not confirmed — please try again';
-    setStatus(
-      `${reason} (${remaining} attempt${remaining === 1 ? '' : 's'} left)`
-    );
+    setStatus(`${reason} (${remaining} attempt${remaining === 1 ? '' : 's'} left)`);
   };
 
   if (!permission) {
@@ -214,10 +174,7 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
         <Text style={styles.permissionText}>
           Camera permission is required for face verification.
         </Text>
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={requestPermission}
-        >
+        <TouchableOpacity style={styles.primaryButton} onPress={requestPermission}>
           <Text style={styles.primaryButtonText}>Grant Permission</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
@@ -227,7 +184,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
     );
   }
 
-  // ⚠️ CameraView must have NO children. Overlay is a sibling.
   return (
     <View style={styles.container}>
       <CameraView
@@ -236,7 +192,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
         facing="front"
         onCameraReady={() => setCameraReady(true)}
       />
-
       <View style={styles.overlay} pointerEvents="box-none">
         <View style={styles.frame} pointerEvents="none" />
         <Text style={styles.status} pointerEvents="none">
@@ -246,7 +201,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
           Attempts left: {attemptsLeft} / {MAX_ATTEMPTS}
         </Text>
       </View>
-
       <View style={styles.controls}>
         <TouchableOpacity
           style={[
@@ -268,7 +222,6 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
             </Text>
           )}
         </TouchableOpacity>
-
         <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
           <Text style={styles.cancelButtonText}>Cancel</Text>
         </TouchableOpacity>
@@ -279,11 +232,32 @@ function FaceVerifyInner({ onVerified, onCancel }: InnerProps) {
 
 const FaceVerifyScreen = () => {
   const navigation = useNavigation<FaceVerifyNavigationProp>();
+  const route = useRoute<FaceVerifyRouteProp>();
+  const challengeId = route.params?.challengeId;
 
-  const handleVerified = (passed: boolean) => {
+  const handleVerified = async (passed: boolean) => {
+    // If this was a re-verify challenge, report the result first
+    if (challengeId) {
+      try {
+        await studentAPI.respondToChallenge(
+          challengeId,
+          passed,
+          passed ? 'reverify_passed' : 'reverify_failed'
+        );
+        console.log(
+          `✅ Challenge #${challengeId} responded: ${passed ? 'passed' : 'failed'}`
+        );
+      } catch (err) {
+        console.warn('⚠️ Challenge response failed:', err);
+      }
+      // Navigate back — no need to pass faceVerified to Home since this
+      // isn't the initial check-in flow
+      navigation.goBack();
+      return;
+    }
+
+    // Normal check-in flow — pass faceVerified to Home
     try {
-      // ✅ Home no longer takes studentId — identity lives in context.
-      //    faceVerified is still the one-shot signal DashboardScreen reads.
       navigation.navigate('MainTabs', {
         screen: 'Home',
         params: { faceVerified: passed },
@@ -294,6 +268,23 @@ const FaceVerifyScreen = () => {
   };
 
   const handleCancel = () => {
+    if (challengeId) {
+      // Cancel during a challenge = failed verification
+      Alert.alert(
+        'Cancel Re-verify?',
+        'If you cancel, your session will be flagged for admin review.',
+        [
+          { text: 'Go Back', style: 'cancel' },
+          {
+            text: 'Cancel Anyway',
+            style: 'destructive',
+            onPress: () => handleVerified(false),
+          },
+        ]
+      );
+      return;
+    }
+
     Alert.alert(
       'Skip Face Verification?',
       'Your session will be marked as face-verification-failed and flagged for admin review.',
@@ -344,11 +335,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
   },
-  attempts: {
-    color: '#c7d2fe',
-    fontSize: 12,
-    marginTop: 8,
-  },
+  attempts: { color: '#c7d2fe', fontSize: 12, marginTop: 8 },
   controls: {
     position: 'absolute',
     left: 0,
@@ -364,15 +351,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
   },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
+  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  cancelButton: { paddingVertical: 12, alignItems: 'center' },
   cancelButtonText: { color: '#94a3b8', fontSize: 14 },
   buttonDisabled: { opacity: 0.6 },
   permissionText: {
