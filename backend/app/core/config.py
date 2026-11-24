@@ -13,7 +13,7 @@ class Settings:
     """Application settings"""
 
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./zkattend.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./v2.db")
 
     # Security
     JWT_SECRET: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
