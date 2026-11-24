@@ -27,3 +27,5 @@ email-validator>=2.0.0
 
 
 tzdata
+
+python-multipart>=0.0.9
