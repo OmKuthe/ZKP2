@@ -82,8 +82,8 @@ def main():
                     "company_id": company_ids[company_index],
                     "name": name,
                     "description": "Synthetic demonstration internship",
-                    "start_date": "2026-10-01 00:00:00",
-                    "end_date": "2026-10-31 23:59:59",
+                    "start_date": "2026-11-01 00:00:00",
+                    "end_date": "2026-11-30 23:59:59",
                     "daily_start_time": "09:00:00",
                     "daily_end_time": "17:00:00",
                     "is_paid": 0,
@@ -95,12 +95,12 @@ def main():
             absent_counts = {}
 
             for internship_index, (company_index, _) in enumerate(internship_data):
-                for local_index in range(16):
-                    number = internship_index * 16 + local_index + 1
-                    prefix = ["NAG", "PUN", "YAV"][company_index]
-                    sid = f"DEMO-{prefix}-{number:03d}"
+                for local_index in range(10):
+                    number = internship_index * 10 + local_index + 1
+                    sid = f"S{number:03d}"
                     email = f"{sid.lower()}@demo.zkattend.local"
-                    full_name = f"Demo Student {number:02d}"
+                    demo_names = ["Om Kuthe", "Adarsh Patil", "Abhishek Kaldate", "Abhinav Hemke", "Aryan Sharma", "Priya Verma", "Rahul Thakur", "Aniket Deshmukh", "Snehal Patil", "Atharva Joshi", "Riya Sharma", "Saurabh Mishra", "Vaishnavi More", "Yash Kulkarni", "Sakshi Gupta", "Pranav Deshpande", "Tanmay Wankhede", "Aishwarya Pawar", "Akshay Borkar", "Mansi Raut", "Siddhant Joshi", "Rohan Deshmukh", "Ananya Kulkarni", "Shubham Wankhede", "Sneha Choudhary", "Harsh Agrawal", "Isha Bansod", "Kunal Sahu", "Tanvi Mahajan", "Pratik Gawande", "Neha Tiwari", "Akash Nair", "Pooja Rathod", "Nikhil Jadhav", "Aditi Bhoyar", "Manish Yadav", "Komal Kapse", "Devendra Singh", "Shreya Soni", "Varun Mehta"]
+                    full_name = demo_names[number - 1]
 
                     student_id = insert(conn, "students", {
                         "student_id": sid,
@@ -140,13 +140,13 @@ def main():
                     present_counts[student_id] = 0
                     absent_counts[student_id] = 0
 
-            days = [date(2026, 10, 16) + timedelta(days=i) for i in range(5)]
+            days = [date(2026, 11, 10) + timedelta(days=i) for i in range(10)]
 
-            # 56 students attend 4 days; 8 attend all 5 days.
-            # Total = 264 present days / 320 possible = 82.5%.
+            # 36 students attend 9 days; 4 attend all 10 days.
+            # Total = 364 present days / 400 possible = 91%.
             anomaly_cases = {
-                (2, 1), (7, 3), (19, 0),
-                (34, 2), (48, 4), (61, 1)
+                (2, 1), (7, 3), (14, 5), (21, 4),
+                (28, 6), (33, 8), (36, 2), (39, 7)
             }
 
             session_count = 0
@@ -154,7 +154,7 @@ def main():
 
             for student in students:
                 index = student["number"] - 1
-                missed_day = index % 5 if index < 56 else None
+                missed_day = index % 10 if index < 36 else None
 
                 for day_index, day in enumerate(days):
                     if missed_day == day_index:
@@ -171,7 +171,7 @@ def main():
                     anomaly = (index, day_index) in anomaly_cases
 
                     session_code = (
-                        f"DEMO-{student['number']:03d}-"
+                        f"{student['number']:03d}-"
                         f"{day.strftime('%Y%m%d')}"
                     )
                     seed = hashlib.sha256(session_code.encode()).hexdigest()
@@ -370,3 +370,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

@@ -24,8 +24,9 @@ const LAYER_COLORS = {
 
 const today = new Date();
 const iso = (d) => d.toISOString().slice(0, 10);
-const defaultFrom = iso(new Date(today.getFullYear(), today.getMonth() - 1, today.getDate()));
-
+const defaultFrom = iso(
+  new Date(today.getFullYear(), today.getMonth(), today.getDate() - 90)
+);
 const Analytics = () => {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(iso(today));
