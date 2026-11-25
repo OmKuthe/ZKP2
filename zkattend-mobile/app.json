@@ -48,7 +48,8 @@
     "plugins": [
       "expo-asset",
       "react-native-wifi-reborn",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-font"
     ]
   }
 }
